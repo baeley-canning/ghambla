@@ -126,7 +126,17 @@ One decision path, three execution backends. The same code that produces a backt
 
 **Evaluation Harness.** Walk-forward analysis, a genuinely untouched out-of-sample holdout, benchmark comparison against SPY buy-and-hold after costs, and computation of the graduation metrics.
 
-### 3.2 Language and stack
+### 3.2 Modelling assumptions that affect the numbers
+
+Three judgement calls in the backtest change reported returns, so they are recorded here rather than buried in code.
+
+**Universe is dated S&P 500 membership.** The tradeable set on any date is who was actually in the index that day, reconstructed from published membership spans. Using today's constituents instead would assume we knew years ago which companies would survive, which inflates returns by silently deleting every failure. There is deliberately no hard-coded constituent list anywhere in the codebase.
+
+**Delisted holdings are cashed out at their last known close.** When a held security stops trading — acquired, delisted, bankrupt — the position is liquidated at the last price we have, after a five-day staleness window so public holidays are not mistaken for delistings. The alternative, carrying it forever at its last close, would let a bankrupt company sit in the equity curve at full value. This is an approximation: it is roughly right for an acquisition and too generous for a bankruptcy, and it flatters results by an amount that grows with the number of dead names held.
+
+**Price coverage is a reported metric, not an assumption.** Reconstructing membership only removes survivorship bias if the dead companies can actually be priced. Where historical prices are unavailable, those names can never be bought, and the bias returns through the back door. The fraction of historical members we can price is written to `data/coverage.json` and printed on every backtest, so the residual bias is visible rather than assumed away.
+
+### 3.3 Language and stack
 
 Python: `ib_async`/`ib_insync` for IBKR, pandas or polars for the data layer, and the entire quantitative and LLM ecosystem are Python-native. Choosing anything else would mean reimplementing tooling that already exists and is well tested.
 
