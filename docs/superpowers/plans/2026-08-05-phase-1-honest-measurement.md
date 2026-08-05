@@ -1669,6 +1669,50 @@ git commit -m "Add CLI for ingest and backtest with Gate 0 reporting"
 
 ---
 
+---
+
+## Phase 1b: Removing survivorship bias (added after the first Gate 0 run)
+
+The first end-to-end run scored a Sharpe edge of +0.27 against the +0.30 gate, on a hand-picked universe of 30 current large caps. That universe was the largest known problem with the result, and Task 10 required it to be flagged on every run. This section records the work that removed it.
+
+### Task 11: Dated S&P 500 membership
+
+**Files:** Create `src/ghambla/sp500.py`, `tests/test_sp500.py`
+
+**Produces:** `MembershipSpan(ticker, start, end)`, `parse_membership(csv_text)`, `members_on(spans, day)`, `ever_members_between(spans, start, end)`, `snapshot_dates(start, end)`, `to_yahoo_symbol(ticker)`, `fetch_membership(url)`
+
+Membership spans come from `fja05680/sp500`, which publishes one row per continuous period of index membership; a ticker that left and rejoined appears more than once. Parsing is a pure function over CSV text so it tests without network. S&P writes share classes with dots (`BRK.B`), Yahoo with dashes (`BRK-B`), so symbols are mapped at the boundary.
+
+### Task 12: Ingest that survives dead tickers
+
+**Files:** Modify `src/ghambla/store/ingest.py`, `tests/test_ingest.py`
+
+**Produces:** `IngestReport(bars_stored, succeeded, empty, failed)` with `.requested` and `.coverage`; `ingest(...)` now returns it and takes an `on_progress` callback.
+
+Delisted tickers routinely 404. The previous `ingest` aborted on the first exception, which was survivable only because every symbol in the old universe was a living mega-cap. Coverage is an honesty metric, not a diagnostic: unpriceable dead companies are survivorship bias returning by the back door.
+
+### Task 13: Liquidate delisted holdings
+
+**Files:** Modify `src/ghambla/backtest.py`, `tests/test_backtest.py`
+
+`run_backtest` gains `stale_days: int = 5`. A held security with no bar dated today, whose last bar is at least `stale_days` old, is sold at that last close. Previously such a position was carried at full value indefinitely, which would let a bankrupt company prop up the equity curve. Five days distinguishes a delisting from a public holiday.
+
+### Task 14: Dated universe in the CLI
+
+**Files:** Rewrite `src/ghambla/universe.py`, `src/ghambla/cli.py`; create `tests/test_cli.py`
+
+`universe.py` keeps only `BENCHMARK` and `WARMUP_DAYS = 400`; the hard-coded constituent list is deleted, since an as-of-today list is precisely the bias being removed. `ingest` downloads every ticker that was a member at any point in the window plus warm-up, then writes monthly membership snapshots. Coverage is persisted to `data/coverage.json` and printed on every backtest.
+
+### Task 15: Batch the read path
+
+**Files:** Modify `src/ghambla/store/store.py`, `src/ghambla/store/schema.py`, `src/ghambla/backtest.py`, `tests/test_store.py`
+
+**Produces:** `FeatureStore.latest_bars_as_of(as_of, symbols) -> dict[str, Bar]`
+
+One query per symbol per day is ~3M round trips at 500 names over 2156 days. The batched query fetches the whole watchlist at once, and `test_latest_bars_agrees_with_the_per_symbol_read_path` asserts it matches the audited path on every as-of date so the optimisation cannot diverge from the point-in-time guarantee. An index on `universe(knowable_at, effective)` removes a full scan per day.
+
+---
+
 ## Self-Review
 
 **Spec coverage.** Design doc §3.1 components covered by this plan: Feature Store (Task 3), Signal Generators (Task 6), Portfolio Constructor (Task 7), Execution Adapter `BacktestBroker` (Task 8), Evaluation Harness (Task 9). Deliberately deferred with their phase noted in the design doc: Allocator (Phase 5), Risk Gate and Journal (Phase 2), Reconciliation and paper/live adapters (Phase 3), news and fundamental signals (Phase 4). §8 testing categories 1 and 2 (point-in-time correctness, cost model) are Tasks 4 and 2; categories 3 and 4 (risk gate, reconciliation) belong to Phases 2 and 3 and have no Phase 1 task, correctly.
