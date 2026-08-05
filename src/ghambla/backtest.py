@@ -16,7 +16,7 @@ from typing import Sequence
 
 from .costs import ibkr_tiered_commission
 from .portfolio import equal_weight_top_n
-from .store.store import FeatureStore
+from .store.store import Bar, FeatureStore
 
 MIN_TRADE_VALUE = 1.0  # below this, an order is dust and is skipped
 
@@ -40,7 +40,8 @@ class BacktestResult:
 
 def run_backtest(store: FeatureStore, signal, start: dt.date, end: dt.date,
                  initial_cash: float = 10_000.0, top_n: int = 10,
-                 rebalance_every: int = 21, spread_bps: float = 5.0) -> BacktestResult:
+                 rebalance_every: int = 21, spread_bps: float = 5.0,
+                 stale_days: int = 5) -> BacktestResult:
     dates = store.trading_dates(start, end)
     if not dates:
         return BacktestResult()
@@ -55,6 +56,25 @@ def run_backtest(store: FeatureStore, signal, start: dt.date, end: dt.date,
     for i, today in enumerate(dates):
         universe = store.universe_as_of(today)
         watched = sorted(set(universe) | set(positions))
+
+        # 0. Cash out anything that has stopped trading. A holding whose
+        #    security was acquired or delisted cannot be carried at its last
+        #    close forever, or a dead company sits in the equity curve at full
+        #    value. A short gap is a holiday, not a delisting, hence stale_days.
+        if positions:
+            still_trading = _opens_on(store, today, sorted(positions))
+            last_bars = _last_bars_on(store, today, sorted(positions))
+            for sym in sorted(positions):
+                if sym in still_trading:
+                    continue
+                last = last_bars.get(sym)
+                if last is None or (today - last.date).days < stale_days:
+                    continue
+                shares = positions.pop(sym)
+                commission = ibkr_tiered_commission(shares, last.close)
+                cash += shares * last.close - commission
+                trades.append(Trade(date=today, symbol=sym, side="SELL", shares=shares,
+                                    price=last.close, commission=commission))
 
         # 1. Execute yesterday's decision at TODAY's open.
         if pending is not None:
@@ -118,4 +138,13 @@ def _opens_on(store: FeatureStore, day: dt.date, symbols: Sequence[str]) -> dict
     for sym, bars in store.bars_as_of(day, symbols, lookback=1).items():
         if bars and bars[-1].date == day:
             out[sym] = bars[-1].open
+    return out
+
+
+def _last_bars_on(store: FeatureStore, day: dt.date, symbols: Sequence[str]) -> dict[str, Bar]:
+    """Most recent bar per symbol knowable at `day`, however old."""
+    out = {}
+    for sym, bars in store.bars_as_of(day, symbols, lookback=1).items():
+        if bars:
+            out[sym] = bars[-1]
     return out

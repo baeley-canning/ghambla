@@ -11,6 +11,7 @@ import json
 import time
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass
 from typing import Protocol, Sequence
 
 from .store import Bar, FeatureStore
@@ -70,10 +71,53 @@ class YahooDataSource:
         return parse_yahoo_chart(payload, symbol)
 
 
+@dataclass(frozen=True)
+class IngestReport:
+    """What actually made it into the store, and what did not.
+
+    Coverage matters for honesty, not just diagnostics: an unbiased universe
+    is only unbiased if we can actually price the names that later died. A run
+    that silently drops half the delisted tickers has quietly reintroduced
+    survivorship bias, so the fraction gets reported and recorded.
+    """
+    bars_stored: int
+    succeeded: list[str]
+    empty: list[str]
+    failed: dict[str, str]
+
+    @property
+    def requested(self) -> int:
+        return len(self.succeeded) + len(self.empty) + len(self.failed)
+
+    @property
+    def coverage(self) -> float:
+        return len(self.succeeded) / self.requested if self.requested else 0.0
+
+
 def ingest(store: FeatureStore, source: DataSource, symbols: Sequence[str],
-           range_: str = "10y") -> int:
+           range_: str = "10y", on_progress=None) -> IngestReport:
+    """Fetch and store bars for each symbol, surviving individual failures.
+
+    Delisted tickers routinely 404. Aborting the whole run on the first dead
+    company would make the unbiased universe impossible to build.
+    """
     total = 0
-    for symbol in symbols:
-        bars = source.fetch(symbol, range_)
-        total += store.upsert_bars(bars)
-    return total
+    succeeded: list[str] = []
+    empty: list[str] = []
+    failed: dict[str, str] = {}
+
+    for i, symbol in enumerate(symbols):
+        try:
+            bars = source.fetch(symbol, range_)
+        except Exception as exc:  # network, HTTP, malformed payload
+            failed[symbol] = f"{type(exc).__name__}: {exc}"
+        else:
+            if bars:
+                total += store.upsert_bars(bars)
+                succeeded.append(symbol)
+            else:
+                empty.append(symbol)
+        if on_progress:
+            on_progress(i + 1, len(symbols), symbol)
+
+    return IngestReport(bars_stored=total, succeeded=succeeded, empty=empty, failed=failed)

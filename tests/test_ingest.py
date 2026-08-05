@@ -1,6 +1,9 @@
 import datetime as dt
 
-from ghambla.store.ingest import parse_yahoo_chart
+import pytest
+
+from ghambla.store.ingest import ingest, parse_yahoo_chart
+from ghambla.store.store import Bar, FeatureStore
 
 PAYLOAD = {
     "chart": {"result": [{
@@ -53,3 +56,60 @@ def test_empty_result_yields_no_bars():
 
 def test_missing_chart_key_yields_no_bars():
     assert parse_yahoo_chart({}, "AAPL") == []
+
+
+# --- resilience: delisted tickers routinely 404, and must not kill a run ---
+
+
+class StubSource:
+    """Serves one bar per symbol, but raises for anything in `broken`."""
+
+    def __init__(self, broken=(), empty=()):
+        self.broken = set(broken)
+        self.empty = set(empty)
+        self.calls = []
+
+    def fetch(self, symbol, range_="10y"):
+        self.calls.append(symbol)
+        if symbol in self.broken:
+            raise OSError(f"HTTP 404 for {symbol}")
+        if symbol in self.empty:
+            return []
+        return [Bar(symbol=symbol, date=dt.date(2026, 1, 5), open=10.0, high=10.0,
+                    low=10.0, close=10.0, adj_close=10.0, volume=100)]
+
+
+@pytest.fixture
+def store(tmp_path):
+    s = FeatureStore(tmp_path / "ing.db")
+    yield s
+    s.close()
+
+
+def test_a_failing_symbol_does_not_abort_the_run(store):
+    source = StubSource(broken=["DEAD"])
+    report = ingest(store, source, ["AAA", "DEAD", "BBB"])
+    assert source.calls == ["AAA", "DEAD", "BBB"]
+    assert report.bars_stored == 2
+
+
+def test_failures_are_recorded_with_their_reason(store):
+    report = ingest(store, StubSource(broken=["DEAD"]), ["AAA", "DEAD"])
+    assert "DEAD" in report.failed
+    assert "404" in report.failed["DEAD"]
+    assert report.succeeded == ["AAA"]
+
+
+def test_symbols_returning_no_bars_count_as_missing_not_succeeded(store):
+    report = ingest(store, StubSource(empty=["QUIET"]), ["AAA", "QUIET"])
+    assert report.succeeded == ["AAA"]
+    assert "QUIET" in report.empty
+
+
+def test_coverage_is_reported_as_a_fraction(store):
+    report = ingest(store, StubSource(broken=["D1"], empty=["E1"]), ["AAA", "BBB", "D1", "E1"])
+    assert report.coverage == pytest.approx(0.5)
+
+
+def test_coverage_of_an_empty_request_is_zero(store):
+    assert ingest(store, StubSource(), []).coverage == 0.0

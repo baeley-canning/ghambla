@@ -104,6 +104,89 @@ def test_empty_date_range_yields_empty_result(store):
     assert r.trades == []
 
 
+def _delisting_store(tmp_path, dead_days=20, total_days=45):
+    """AAA trades throughout; DEAD stops trading partway, as if acquired."""
+    s = FeatureStore(tmp_path / "delist.db")
+    day = d("2026-01-01")
+    bars = []
+    for i in range(total_days):
+        bars.append(Bar("AAA", day, 100.0, 100.0, 100.0, 100.0, 100.0, 1000))
+        if i < dead_days:
+            bars.append(Bar("DEAD", day, 50.0, 50.0, 50.0, 50.0, 50.0, 1000))
+        day += dt.timedelta(days=1)
+    s.upsert_bars(bars)
+    s.set_universe(d("2025-12-01"), ["AAA", "DEAD"])
+    return s
+
+
+class LikesDead:
+    name = "likes_dead"
+
+    def score(self, store, as_of, universe):
+        return {sym: Score(value=1.0 if sym == "DEAD" else 0.5,
+                           confidence=1.0, rationale="stub") for sym in universe}
+
+
+def test_delisted_position_is_liquidated_at_last_known_close(tmp_path):
+    """A holding whose security stops trading must be cashed out, not frozen.
+
+    Carrying it at its last close forever would let a bankrupt company sit in
+    the equity curve at full value.
+    """
+    s = _delisting_store(tmp_path)
+    try:
+        r = run_backtest(s, LikesDead(), d("2026-01-01"), d("2026-02-14"),
+                         initial_cash=10_000.0, top_n=1, rebalance_every=1, spread_bps=0.0)
+        sells = [t for t in r.trades if t.symbol == "DEAD" and t.side == "SELL"]
+        assert sells, "delisted position was never liquidated"
+        assert sells[-1].price == pytest.approx(50.0)
+    finally:
+        s.close()
+
+
+def test_liquidation_converts_the_position_to_cash(tmp_path):
+    s = _delisting_store(tmp_path)
+    try:
+        r = run_backtest(s, LikesDead(), d("2026-01-01"), d("2026-02-14"),
+                         initial_cash=10_000.0, top_n=1, rebalance_every=1, spread_bps=0.0)
+        # Once DEAD is gone the curve must stop moving with it; AAA is flat at
+        # 100 and DEAD was flat at 50, so equity should settle and stay put.
+        assert r.equity[-1] == pytest.approx(r.equity[-2], rel=1e-6)
+    finally:
+        s.close()
+
+
+def test_a_one_day_data_gap_does_not_trigger_liquidation(tmp_path):
+    """Holidays and single missing bars are not delistings."""
+    s = FeatureStore(tmp_path / "gap.db")
+    try:
+        day = d("2026-01-01")
+        bars = []
+        for i in range(40):
+            bars.append(Bar("AAA", day, 100.0, 100.0, 100.0, 100.0, 100.0, 1000))
+            if i != 25:  # single missing bar
+                bars.append(Bar("GAPPY", day, 50.0, 50.0, 50.0, 50.0, 50.0, 1000))
+            day += dt.timedelta(days=1)
+        s.upsert_bars(bars)
+        s.set_universe(d("2025-12-01"), ["AAA", "GAPPY"])
+
+        class LikesGappy:
+            name = "likes_gappy"
+
+            def score(self, store, as_of, universe):
+                return {sym: Score(value=1.0 if sym == "GAPPY" else 0.5,
+                                   confidence=1.0, rationale="stub") for sym in universe}
+
+        r = run_backtest(s, LikesGappy(), d("2026-01-01"), d("2026-02-09"),
+                         initial_cash=10_000.0, top_n=1, rebalance_every=1, spread_bps=0.0)
+        forced = [t for t in r.trades if t.symbol == "GAPPY" and t.side == "SELL"
+                  and t.shares > 0 and t.price == pytest.approx(50.0)]
+        # A rebalance sell is fine; a full liquidation of the whole position is not.
+        assert not any(t.shares > 100 for t in forced)
+    finally:
+        s.close()
+
+
 def test_position_is_sold_when_signal_stops_liking_it(store):
     """Buy on the first decision, then flip the signal and confirm it exits."""
     dates = store.trading_dates(d("2026-01-01"), d("2026-02-28"))
