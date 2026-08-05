@@ -1,19 +1,14 @@
-"""Starter universe for Phase 1.
+"""Universe configuration.
 
-WARNING: THIS LIST IS SURVIVORSHIP-BIASED. It is a snapshot of large-cap US
-names as of 2026, so backtesting it over a ten-year history implicitly assumes
-we knew in 2016 which companies would still be large in 2026. Results will be
-flattering and must not be treated as evidence of an edge.
-
-Removing this bias requires dated index-membership data, which is Phase 4
-work. The store's `set_universe(effective, symbols)` already accepts dated
-snapshots, so no schema change will be needed when that data arrives.
+The tradeable universe is the S&P 500 *as it stood on each date*, reconstructed
+in `ghambla.sp500` from published membership spans. There is deliberately no
+hard-coded list of constituents here: an as-of-today list is exactly the
+survivorship bias this project exists to avoid.
 """
 
 BENCHMARK = "SPY"
 
-STARTER = [
-    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AVGO", "LLY", "JPM",
-    "V", "UNH", "XOM", "MA", "COST", "HD", "PG", "JNJ", "ABBV", "WMT",
-    "MRK", "CVX", "KO", "PEP", "ADBE", "CRM", "BAC", "TMO", "MCD", "CSCO",
-]
+# Days of price history needed before the backtest window opens, so the 252-day
+# momentum lookback is satisfied on day one. Calendar days, generously rounded
+# up from 252 trading days.
+WARMUP_DAYS = 400
