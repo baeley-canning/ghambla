@@ -35,4 +35,9 @@ CREATE TABLE IF NOT EXISTS universe (
 );
 """
 
-ALL = [BARS, BARS_INDEX, UNIVERSE]
+UNIVERSE_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_universe_knowable
+    ON universe (knowable_at, effective);
+"""
+
+ALL = [BARS, BARS_INDEX, UNIVERSE, UNIVERSE_INDEX]

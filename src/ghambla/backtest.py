@@ -12,11 +12,9 @@ door.
 """
 import datetime as dt
 from dataclasses import dataclass, field
-from typing import Sequence
-
 from .costs import ibkr_tiered_commission
 from .portfolio import equal_weight_top_n
-from .store.store import Bar, FeatureStore
+from .store.store import FeatureStore
 
 MIN_TRADE_VALUE = 1.0  # below this, an order is dust and is skipped
 
@@ -57,28 +55,30 @@ def run_backtest(store: FeatureStore, signal, start: dt.date, end: dt.date,
         universe = store.universe_as_of(today)
         watched = sorted(set(universe) | set(positions))
 
+        # One read per day for the whole watchlist. `latest` carries a symbol's
+        # most recent bar forward when it did not trade today, so a bar dated
+        # today means "traded today" and an older one means "did not".
+        latest = store.latest_bars_as_of(today, watched)
+
         # 0. Cash out anything that has stopped trading. A holding whose
         #    security was acquired or delisted cannot be carried at its last
         #    close forever, or a dead company sits in the equity curve at full
         #    value. A short gap is a holiday, not a delisting, hence stale_days.
-        if positions:
-            still_trading = _opens_on(store, today, sorted(positions))
-            last_bars = _last_bars_on(store, today, sorted(positions))
-            for sym in sorted(positions):
-                if sym in still_trading:
-                    continue
-                last = last_bars.get(sym)
-                if last is None or (today - last.date).days < stale_days:
-                    continue
-                shares = positions.pop(sym)
-                commission = ibkr_tiered_commission(shares, last.close)
-                cash += shares * last.close - commission
-                trades.append(Trade(date=today, symbol=sym, side="SELL", shares=shares,
-                                    price=last.close, commission=commission))
+        for sym in sorted(positions):
+            last = latest.get(sym)
+            if last is None or last.date == today:
+                continue
+            if (today - last.date).days < stale_days:
+                continue
+            shares = positions.pop(sym)
+            commission = ibkr_tiered_commission(shares, last.close)
+            cash += shares * last.close - commission
+            trades.append(Trade(date=today, symbol=sym, side="SELL", shares=shares,
+                                price=last.close, commission=commission))
 
         # 1. Execute yesterday's decision at TODAY's open.
         if pending is not None:
-            opens = _opens_on(store, today, watched)
+            opens = {s: b.open for s, b in latest.items() if b.date == today}
             targets = dict(pending)
             equity_at_open = cash + sum(sh * opens.get(sym, 0.0) for sym, sh in positions.items())
 
@@ -112,8 +112,8 @@ def run_backtest(store: FeatureStore, signal, start: dt.date, end: dt.date,
             pending = None
 
         # 2. Mark to market on today's close.
-        closes = _closes_on(store, today, watched)
-        equity.append(cash + sum(sh * closes.get(sym, 0.0) for sym, sh in positions.items()))
+        equity.append(cash + sum(sh * latest[sym].close
+                                 for sym, sh in positions.items() if sym in latest))
 
         # 3. Decide, using only data knowable as of today's close.
         if i % rebalance_every == 0 and i < len(dates) - 1 and universe:
@@ -123,28 +123,3 @@ def run_backtest(store: FeatureStore, signal, start: dt.date, end: dt.date,
     return BacktestResult(dates=dates, equity=equity, trades=trades)
 
 
-def _closes_on(store: FeatureStore, day: dt.date, symbols: Sequence[str]) -> dict[str, float]:
-    """Last known close per symbol, carrying forward if it did not trade today."""
-    out = {}
-    for sym, bars in store.bars_as_of(day, symbols, lookback=1).items():
-        if bars:
-            out[sym] = bars[-1].close
-    return out
-
-
-def _opens_on(store: FeatureStore, day: dt.date, symbols: Sequence[str]) -> dict[str, float]:
-    """Today's open per symbol, omitting anything that did not trade today."""
-    out = {}
-    for sym, bars in store.bars_as_of(day, symbols, lookback=1).items():
-        if bars and bars[-1].date == day:
-            out[sym] = bars[-1].open
-    return out
-
-
-def _last_bars_on(store: FeatureStore, day: dt.date, symbols: Sequence[str]) -> dict[str, Bar]:
-    """Most recent bar per symbol knowable at `day`, however old."""
-    out = {}
-    for sym, bars in store.bars_as_of(day, symbols, lookback=1).items():
-        if bars:
-            out[sym] = bars[-1]
-    return out

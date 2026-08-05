@@ -79,6 +79,27 @@ class FeatureStore:
             out[symbol] = found
         return out
 
+    def latest_bars_as_of(self, as_of: dt.date, symbols: Sequence[str]) -> dict[str, Bar]:
+        """Most recent bar per symbol knowable at `as_of`, in a single query.
+
+        The per-symbol loop in `bars_as_of` costs one query each, which at 500
+        names across 2000 trading days is millions of round trips. The backtest
+        needs only the latest bar on most days, so it gets it in one statement.
+        Symbols with no bars are simply absent from the result.
+        """
+        if not symbols:
+            return {}
+        placeholders = ",".join("?" * len(symbols))
+        cur = self._conn.execute(
+            f"SELECT b.* FROM bars b JOIN ("
+            f"  SELECT symbol, MAX(date) AS d FROM bars"
+            f"  WHERE knowable_at <= ? AND symbol IN ({placeholders})"
+            f"  GROUP BY symbol"
+            f") m ON b.symbol = m.symbol AND b.date = m.d",
+            (as_of.isoformat(), *symbols),
+        )
+        return {r["symbol"]: self._to_bar(r) for r in cur.fetchall()}
+
     def set_universe(self, effective: dt.date, symbols: Sequence[str]) -> None:
         self._conn.executemany(
             "INSERT OR REPLACE INTO universe (effective, symbol, knowable_at) VALUES (?,?,?)",

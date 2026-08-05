@@ -68,6 +68,46 @@ def test_universe_before_any_snapshot_is_empty(store):
     assert store.universe_as_of(d("2025-12-31")) == []
 
 
+def test_latest_bars_returns_one_bar_per_symbol(store):
+    store.upsert_bars([bar("AAPL", "2026-01-05", 100.0), bar("AAPL", "2026-01-06", 101.0),
+                       bar("MSFT", "2026-01-05", 200.0)])
+    got = store.latest_bars_as_of(d("2026-01-06"), ["AAPL", "MSFT"])
+    assert got["AAPL"].close == 101.0
+    assert got["MSFT"].close == 200.0
+
+
+def test_latest_bars_respects_the_as_of_date(store):
+    store.upsert_bars([bar("AAPL", "2026-01-05", 100.0), bar("AAPL", "2026-01-06", 101.0)])
+    got = store.latest_bars_as_of(d("2026-01-05"), ["AAPL"])
+    assert got["AAPL"].close == 100.0
+
+
+def test_latest_bars_carries_forward_a_symbol_that_did_not_trade(store):
+    store.upsert_bars([bar("AAPL", "2026-01-05", 100.0), bar("MSFT", "2026-01-06", 200.0)])
+    got = store.latest_bars_as_of(d("2026-01-06"), ["AAPL", "MSFT"])
+    assert got["AAPL"].date == d("2026-01-05")
+
+
+def test_latest_bars_omits_symbols_with_no_data(store):
+    store.upsert_bars([bar("AAPL", "2026-01-05", 100.0)])
+    assert "MSFT" not in store.latest_bars_as_of(d("2026-01-05"), ["AAPL", "MSFT"])
+
+
+def test_latest_bars_of_nothing_is_empty(store):
+    assert store.latest_bars_as_of(d("2026-01-05"), []) == {}
+
+
+def test_latest_bars_agrees_with_the_per_symbol_read_path(store):
+    """The fast path must not disagree with the audited one."""
+    store.upsert_bars([bar("AAPL", f"2026-01-{day:02d}", 100.0 + day) for day in range(5, 15)]
+                      + [bar("MSFT", f"2026-01-{day:02d}", 50.0 + day) for day in range(5, 12)])
+    for day in range(5, 15):
+        as_of = d(f"2026-01-{day:02d}")
+        fast = store.latest_bars_as_of(as_of, ["AAPL", "MSFT"])
+        slow = store.bars_as_of(as_of, ["AAPL", "MSFT"], lookback=1)
+        assert {k: v for k, v in fast.items()} == {k: v[-1] for k, v in slow.items() if v}
+
+
 def test_trading_dates_are_the_dates_we_actually_have_bars_for(store):
     store.upsert_bars([bar("AAPL", "2026-01-05", 100.0),
                        bar("MSFT", "2026-01-05", 200.0),
