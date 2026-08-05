@@ -23,35 +23,70 @@ the time, so the number it prints is fiction. This system is built so that
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest                      # 58 tests
-.venv/bin/python -m ghambla.cli ingest
+.venv/bin/pytest                                    # 91 tests
+.venv/bin/python -m ghambla.cli ingest              # ~45 min, 719 symbols
 .venv/bin/python -m ghambla.cli backtest --start 2018-01-01 --end 2026-08-01
 ```
+
+Ingest is deliberately paced so it does not hammer a free data endpoint. The
+backtest over the full window takes about 13 minutes.
 
 ## Current result
 
 12-1 momentum, top 10 names, rebalanced every 21 days, 2018-01-01 to
-2026-08-01, after IBKR Tiered commission and a 5bp spread:
+2026-08-01, after IBKR Tiered commission and a 5bp spread. The universe is
+dated S&P 500 membership — 718 tickers that were index members at some point
+in the window, including those later acquired or delisted.
 
 | Metric | Strategy | SPY |
 |---|---|---|
-| Total return | +425.38% | +177.94% |
-| CAGR | +21.34% | +12.66% |
-| Sharpe | 0.99 | 0.72 |
-| Max drawdown | -30.64% | -34.10% |
-| Trades | 1109 | 1 |
+| Total return | +239.49% | +177.94% |
+| CAGR | +15.32% | +12.66% |
+| Sharpe | 0.60 | 0.72 |
+| Max drawdown | -36.31% | -34.10% |
+| Trades | 1263 | 1 |
 
-**Gate 0: FAIL.** The Sharpe edge over SPY is +0.27, short of the +0.30
-required. The strategy does not advance to paper trading.
+**Gate 0: FAIL.** Sharpe edge over SPY is **-0.12** against the +0.30
+required, and drawdown is worse than the benchmark. The strategy does not
+advance to paper trading.
 
-That headline return looks impressive and should be distrusted. The starter
-universe is today's large caps, so the backtest implicitly knew in 2018 which
-companies would still be winners in 2026 — the numbers above are inflated by
-survivorship bias and *still* fail the gate. Fixing the bias will lower them.
+It beats SPY on raw return and loses on risk-adjusted return. That is the
+whole story: the extra 62 points of return were bought with extra risk, not
+with skill.
 
-The correct next move is a better signal or an unbiased universe, not looser
-thresholds. Tuning parameters until the gate passes is curve-fitting, which is
-precisely what this harness exists to catch.
+### What survivorship bias was worth
+
+The same strategy, run earlier against a hand-picked universe of 30 current
+large caps:
+
+| Metric | Biased universe | Dated membership | Change |
+|---|---|---|---|
+| Total return | +425.38% | +239.49% | -185.89pp |
+| CAGR | +21.34% | +15.32% | -6.02pp |
+| Sharpe | 0.99 | 0.60 | **-0.39** |
+| Sharpe edge vs SPY | +0.27 | -0.12 | -0.39 |
+
+**Survivorship bias was worth 0.39 of Sharpe — more than the entire apparent
+edge.** The first run was not "nearly passing". It was measuring a universe
+that knew in 2018 which companies would still be winning in 2026. Once the
+backtest can only pick from names actually in the index at the time, and must
+hold the ones that later collapsed, momentum has no risk-adjusted edge here.
+
+### Residual bias, still present
+
+Coverage is 84.7%: 609 of 719 historical members could be priced. The missing
+110 are disproportionately the acquired and delisted — AABA, ABMD, BCR, HAR,
+LLTC, MJN, RAI, STJ — because data vendors stop serving history once a ticker
+dies. Those names were never buyable by the backtest, so some survivorship
+bias remains and the numbers above are still a little generous. Coverage is
+recomputed on every ingest and printed under every result.
+
+### What not to do next
+
+Tuning the lookback, the rebalance period, or the position count until Gate 0
+passes is curve-fitting, and it is exactly what this harness exists to catch.
+A real fix is a better signal, a genuinely different one, or accepting that
+this strategy does not work.
 
 ## Design
 
