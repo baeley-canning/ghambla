@@ -23,7 +23,7 @@ The original brief said the system "will outperform most professional traders." 
 
 None of this means the project is pointless. It means the correct goal is: **build an apparatus that can detect a real edge if one exists, and — much more likely — tell you clearly and early that one does not.** A system that credibly reports "no edge found" after six months has done its job and saved you money. A system that reports a 300% backtest return has almost certainly lied to you.
 
-The blackjack advisor already in this workspace is a useful reference point. Card counting works because the edge is small, provable in advance, and survives only with strict bankroll discipline. Trading offers no equivalent proof — so the discipline has to be even tighter, and the burden of proof sits with the strategy.
+It is worth contrasting this with a game where an edge genuinely is provable. Card counting in blackjack works because the advantage can be derived in advance, is known to be small, and survives only under strict bankroll discipline. Markets offer no equivalent proof — nobody can hand you the edge before you trade. So the discipline has to be tighter, not looser, and the entire burden of proof sits with the strategy.
 
 ---
 
@@ -128,9 +128,9 @@ One decision path, three execution backends. The same code that produces a backt
 
 ### 3.2 Language and stack
 
-Python. The existing blackjack tool in this workspace is JavaScript, but this is a different problem: `ib_async`/`ib_insync` for IBKR, pandas or polars for the data layer, and the entire quantitative and LLM ecosystem are Python-native. Rewriting that in JS would be a self-inflicted wound.
+Python: `ib_async`/`ib_insync` for IBKR, pandas or polars for the data layer, and the entire quantitative and LLM ecosystem are Python-native. Choosing anything else would mean reimplementing tooling that already exists and is well tested.
 
-Implementation lives in a new self-contained directory, `trader/`, separate from the blackjack tool.
+The repository holds nothing but this project, so implementation lives at the repository root as a standard Python package rather than in a subdirectory.
 
 ---
 
