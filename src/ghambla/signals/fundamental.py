@@ -23,7 +23,7 @@ import statistics
 from typing import Sequence
 
 from ..edgar import EQUITY, NET_INCOME, SHARES
-from ..store.store import FeatureStore
+from ..store.store import FeatureStore, split_factor_after
 from .base import NO_OPINION, Score
 
 # An annual filing older than this is treated as no information rather than
@@ -31,16 +31,54 @@ from .base import NO_OPINION, Score
 # that stopped reporting look eternally cheap.
 MAX_FILING_AGE_DAYS = 730
 
+# Plausibility bounds. These reject data errors, not unusual companies.
+#
+# Filers tag share counts inconsistently — some report in thousands, so a
+# company with 273 million shares appears as 273,298. That understates market
+# cap by a thousandfold and produces an earnings yield of 9,468%, which would
+# otherwise rank as the single most attractive stock in the index. No large cap
+# trades on a P/E below 1, so anything beyond 100% is a broken number.
+#
+# ROE explodes toward infinity for companies whose buybacks have left almost no
+# book equity: Colgate on 230m of equity against 2.3bn of income scores 1000%.
+# That is arithmetically correct and financially meaningless — the ratio stops
+# measuring quality once the denominator approaches zero.
+MAX_ABS_EARNINGS_YIELD = 1.0
+MAX_ABS_ROE = 3.0
+
+# Even after removing errors, factor distributions have long tails that would
+# let a handful of names dominate every z-score. Clipping to percentiles before
+# standardising is routine in factor construction.
+WINSOR_LOW_PCT = 0.05
+WINSOR_HIGH_PCT = 0.95
+
+
+def _percentile(sorted_xs: list[float], q: float) -> float:
+    if not sorted_xs:
+        return 0.0
+    idx = min(len(sorted_xs) - 1, max(0, int(round(q * (len(sorted_xs) - 1)))))
+    return sorted_xs[idx]
+
+
+def _winsorise(values: dict[str, float]) -> dict[str, float]:
+    if len(values) < 3:
+        return dict(values)
+    xs = sorted(values.values())
+    lo = _percentile(xs, WINSOR_LOW_PCT)
+    hi = _percentile(xs, WINSOR_HIGH_PCT)
+    return {k: min(max(v, lo), hi) for k, v in values.items()}
+
 
 def _zscores(values: dict[str, float]) -> dict[str, float]:
     if len(values) < 2:
         return {k: 0.0 for k in values}
-    xs = list(values.values())
+    clipped = _winsorise(values)
+    xs = list(clipped.values())
     mean = statistics.fmean(xs)
     sd = statistics.stdev(xs)
     if sd == 0:
-        return {k: 0.0 for k in values}
-    return {k: (v - mean) / sd for k, v in values.items()}
+        return {k: 0.0 for k in clipped}
+    return {k: (v - mean) / sd for k, v in clipped.items()}
 
 
 class FundamentalSignal:
@@ -55,6 +93,7 @@ class FundamentalSignal:
         equity = store.latest_fundamentals_as_of(as_of, EQUITY, universe)
         shares = store.latest_fundamentals_as_of(as_of, SHARES, universe)
         bars = store.latest_bars_as_of(as_of, universe)
+        splits = store.splits_for(universe)
 
         earnings_yield: dict[str, float] = {}
         roe: dict[str, float] = {}
@@ -67,9 +106,16 @@ class FundamentalSignal:
                 continue  # company stopped reporting
             if eq.value <= 0 or sh.value <= 0 or bar.close <= 0:
                 continue  # negative book value or unusable share count
-            market_cap = bar.close * sh.value
-            earnings_yield[sym] = ni.value / market_cap
-            roe[sym] = ni.value / eq.value
+            # Stored prices are split-adjusted; the filed share count is not.
+            # Restore the two to a common basis before multiplying them.
+            market_cap = bar.close * sh.value * split_factor_after(
+                splits.get(sym, []), sh.knowable_at)
+            ey = ni.value / market_cap
+            r = ni.value / eq.value
+            if abs(ey) > MAX_ABS_EARNINGS_YIELD or abs(r) > MAX_ABS_ROE:
+                continue  # misfiled share count, or book equity too near zero
+            earnings_yield[sym] = ey
+            roe[sym] = r
 
         z_value = _zscores(earnings_yield)
         z_quality = _zscores(roe)

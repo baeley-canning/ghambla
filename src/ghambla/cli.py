@@ -21,7 +21,7 @@ from .sp500 import (
     snapshot_dates,
     to_yahoo_symbol,
 )
-from .store.ingest import YahooDataSource, ingest
+from .store.ingest import YahooDataSource, YahooSplitSource, ingest, ingest_splits
 from .store.store import FeatureStore
 from .universe import BENCHMARK, WARMUP_DAYS
 
@@ -74,6 +74,30 @@ def cmd_ingest(args) -> int:
             "coverage": report.coverage,
         }, indent=2))
         print(f"Coverage detail written to {COVERAGE_PATH}")
+    finally:
+        store.close()
+    return 0
+
+
+def cmd_ingest_splits(args) -> int:
+    if not pathlib.Path(args.db).exists():
+        print(f"No database at {args.db}. Run `ingest` first.", file=sys.stderr)
+        return 1
+    store = FeatureStore(args.db)
+    try:
+        warmup_start = args.start - dt.timedelta(days=WARMUP_DAYS)
+        spans = fetch_membership()
+        symbols = sorted({to_yahoo_symbol(t)
+                          for t in ever_members_between(spans, warmup_start, args.end)})
+        print(f"Fetching split history for {len(symbols)} symbols ...")
+
+        def progress(done, total, symbol):
+            if done % 100 == 0 or done == total:
+                print(f"  {done}/{total} ... {symbol}", flush=True)
+
+        n, failed = ingest_splits(store, YahooSplitSource(pause_seconds=args.pause),
+                                  symbols, on_progress=progress)
+        print(f"\nStored {n} split events. {len(failed)} lookups failed.")
     finally:
         store.close()
     return 0
@@ -162,6 +186,12 @@ def main(argv=None) -> int:
     pi.add_argument("--range", default="10y")
     pi.add_argument("--pause", type=float, default=0.2)
     pi.set_defaults(func=cmd_ingest)
+
+    ps = sub.add_parser("ingest-splits", help="download split history")
+    ps.add_argument("--start", type=_date, default=_date("2018-01-01"))
+    ps.add_argument("--end", type=_date, default=dt.date.today())
+    ps.add_argument("--pause", type=float, default=0.2)
+    ps.set_defaults(func=cmd_ingest_splits)
 
     pf = sub.add_parser("ingest-fundamentals", help="download SEC annual fundamentals")
     pf.add_argument("--start", type=_date, default=_date("2018-01-01"))

@@ -14,7 +14,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Protocol, Sequence
 
-from .store import Bar, FeatureStore
+from .store import Bar, FeatureStore, Split
 
 CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/"
 USER_AGENT = "Mozilla/5.0 (compatible; ghambla research)"
@@ -55,6 +55,61 @@ def parse_yahoo_chart(payload: dict, symbol: str) -> list[Bar]:
             adj_close=float(adj_close), volume=int(v),
         ))
     return bars
+
+
+def parse_yahoo_splits(payload: dict, symbol: str) -> list[Split]:
+    """Extract split events from a chart response.
+
+    `ratio` is new shares per old share, taken from numerator/denominator so a
+    10-for-1 is 10.0.
+    """
+    results = payload.get("chart", {}).get("result") or []
+    if not results:
+        return []
+    events = (results[0].get("events") or {}).get("splits") or {}
+
+    out: list[Split] = []
+    for raw in events.values():
+        ts, num, den = raw.get("date"), raw.get("numerator"), raw.get("denominator")
+        if ts is None or not num or not den:
+            continue
+        out.append(Split(symbol=symbol,
+                         date=dt.datetime.fromtimestamp(ts, dt.UTC).date(),
+                         ratio=float(num) / float(den)))
+    return sorted(out, key=lambda s: s.date)
+
+
+class YahooSplitSource:
+    """Fetches only split events, at monthly resolution so payloads stay small."""
+
+    def __init__(self, pause_seconds: float = 0.2) -> None:
+        self._pause = pause_seconds
+
+    def fetch(self, symbol: str, range_: str = "10y") -> list[Split]:
+        params = urllib.parse.urlencode({"range": range_, "interval": "1mo", "events": "split"})
+        req = urllib.request.Request(f"{CHART_URL}{symbol}?{params}",
+                                     headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            payload = json.load(resp)
+        time.sleep(self._pause)
+        return parse_yahoo_splits(payload, symbol)
+
+
+def ingest_splits(store: FeatureStore, source, symbols: Sequence[str],
+                  range_: str = "10y", on_progress=None) -> tuple[int, dict[str, str]]:
+    total = 0
+    failed: dict[str, str] = {}
+    for i, symbol in enumerate(symbols):
+        try:
+            splits = source.fetch(symbol, range_)
+        except Exception as exc:
+            failed[symbol] = f"{type(exc).__name__}: {exc}"
+        else:
+            if splits:
+                total += store.upsert_splits(splits)
+        if on_progress:
+            on_progress(i + 1, len(symbols), symbol)
+    return total, failed
 
 
 class YahooDataSource:

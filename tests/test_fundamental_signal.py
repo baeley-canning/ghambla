@@ -92,6 +92,40 @@ def test_identical_companies_all_score_zero(store):
     assert all(s.value == pytest.approx(0.0) for s in scores.values())
 
 
+def test_misfiled_share_count_is_rejected_not_ranked_top(store):
+    """WRB filed its share count in thousands, implying a 9,468% earnings
+    yield. Unfiltered, that ranks as the most attractive stock in the index."""
+    # 273,298 shares at $50 implies a $13.7m market cap against $1.38bn income.
+    seed(store, "BROKEN", price=50.0, net_income=1_381_359_000,
+         equity=7_784_832_000, shares=273_298)
+    seed(store, "FINE", price=50.0, net_income=1_000_000, equity=10_000_000, shares=1_000_000)
+    scores = FundamentalSignal().score(store, d("2026-02-01"), ["BROKEN", "FINE"])
+    assert scores["BROKEN"].confidence == 0.0
+
+
+def test_near_zero_book_equity_is_rejected(store):
+    """Colgate: 2.3bn income on 230m equity is a 1000% ROE — arithmetically
+    right, financially meaningless, and it would swamp every z-score."""
+    seed(store, "NOBOOK", price=80.0, net_income=2_300_000_000,
+         equity=230_000_000, shares=829_200_000)
+    scores = FundamentalSignal().score(store, d("2026-02-01"), ["NOBOOK"])
+    assert scores["NOBOOK"].confidence == 0.0
+
+
+def test_a_single_outlier_cannot_dominate_the_ranking(store):
+    """Winsorising keeps one extreme name from compressing everyone else."""
+    for i, sym in enumerate(["A", "B", "C", "D", "E", "F", "G"]):
+        seed(store, sym, price=100.0, net_income=1_000_000 + i * 10_000,
+             equity=50_000_000, shares=1_000_000)
+    # H is a legitimate but extreme value, well inside the plausibility bounds
+    seed(store, "H", price=100.0, net_income=90_000_000, equity=100_000_000,
+         shares=1_000_000)
+    syms = ["A", "B", "C", "D", "E", "F", "G", "H"]
+    scores = FundamentalSignal().score(store, d("2026-02-01"), syms)
+    spread = max(s.value for s in scores.values()) - min(s.value for s in scores.values())
+    assert spread < 6.0, "one name is still swamping the distribution"
+
+
 def test_rationale_reports_both_components(store):
     seed(store, "AAA", 100.0, 20_000, 100_000, 1000)
     seed(store, "BBB", 100.0, 10_000, 100_000, 1000)

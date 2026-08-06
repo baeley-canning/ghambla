@@ -29,6 +29,35 @@ class Bar:
 
 
 @dataclass(frozen=True)
+class Split:
+    """A stock split. `ratio` is new shares per old share: 10.0 for a 10-for-1."""
+    symbol: str
+    date: dt.date
+    ratio: float
+
+
+def split_factor_after(splits: list[tuple[dt.date, float]], after: dt.date) -> float:
+    """Cumulative split ratio strictly after `after`.
+
+    Needed because price vendors restate history: a price stored for June 2024
+    has already been divided by every split that happened since. A share count
+    filed with the SEC has not. Multiplying the two gives a market cap wrong by
+    exactly the split factor — NVDA's 10-for-1 made it look ten times cheaper
+    than it was, which is precisely the kind of error a value factor would
+    chase.
+
+    Using splits dated after the valuation date is not lookahead. The true
+    market cap was observable at the time; this only inverts a transformation
+    the vendor applied to storage.
+    """
+    factor = 1.0
+    for day, ratio in splits:
+        if day > after and ratio > 0:
+            factor *= ratio
+    return factor
+
+
+@dataclass(frozen=True)
 class Fact:
     """One reported financial figure.
 
@@ -115,6 +144,38 @@ class FeatureStore:
             (as_of.isoformat(), *symbols),
         )
         return {r["symbol"]: self._to_bar(r) for r in cur.fetchall()}
+
+    def upsert_splits(self, splits: Iterable["Split"]) -> int:
+        rows = [(s.symbol, s.date.isoformat(), s.ratio, s.date.isoformat()) for s in splits]
+        self._conn.executemany(
+            "INSERT INTO splits (symbol, date, ratio, knowable_at) VALUES (?,?,?,?)"
+            " ON CONFLICT(symbol, date) DO UPDATE SET ratio=excluded.ratio",
+            rows,
+        )
+        self._conn.commit()
+        return len(rows)
+
+    def splits_for(self, symbols: Sequence[str]) -> dict[str, list[tuple[dt.date, float]]]:
+        """All known splits per symbol, oldest first.
+
+        Deliberately not filtered by an as-of date. Splits are used only to
+        undo the retroactive split adjustment that the price vendor applies to
+        its history — see `split_factor_after`. That is a storage correction,
+        not a prediction.
+        """
+        if not symbols:
+            return {}
+        placeholders = ",".join("?" * len(symbols))
+        cur = self._conn.execute(
+            f"SELECT symbol, date, ratio FROM splits WHERE symbol IN ({placeholders})"
+            f" ORDER BY symbol, date",
+            tuple(symbols),
+        )
+        out: dict[str, list[tuple[dt.date, float]]] = {}
+        for r in cur.fetchall():
+            out.setdefault(r["symbol"], []).append(
+                (dt.date.fromisoformat(r["date"]), r["ratio"]))
+        return out
 
     def upsert_fundamentals(self, facts: Iterable["Fact"]) -> int:
         rows = [(f.symbol, f.concept, f.period_end.isoformat(), f.value,

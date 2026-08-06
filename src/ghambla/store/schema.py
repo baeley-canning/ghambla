@@ -57,4 +57,15 @@ CREATE INDEX IF NOT EXISTS idx_fundamentals_knowable
     ON fundamentals (concept, knowable_at, symbol);
 """
 
-ALL = [BARS, BARS_INDEX, UNIVERSE, UNIVERSE_INDEX, FUNDAMENTALS, FUNDAMENTALS_INDEX]
+SPLITS = """
+CREATE TABLE IF NOT EXISTS splits (
+    symbol      TEXT NOT NULL,
+    date        TEXT NOT NULL,
+    ratio       REAL NOT NULL,
+    knowable_at TEXT NOT NULL,
+    PRIMARY KEY (symbol, date)
+);
+"""
+
+ALL = [BARS, BARS_INDEX, UNIVERSE, UNIVERSE_INDEX,
+       FUNDAMENTALS, FUNDAMENTALS_INDEX, SPLITS]
