@@ -40,4 +40,21 @@ CREATE INDEX IF NOT EXISTS idx_universe_knowable
     ON universe (knowable_at, effective);
 """
 
-ALL = [BARS, BARS_INDEX, UNIVERSE, UNIVERSE_INDEX]
+FUNDAMENTALS = """
+CREATE TABLE IF NOT EXISTS fundamentals (
+    symbol      TEXT NOT NULL,
+    concept     TEXT NOT NULL,
+    period_end  TEXT NOT NULL,
+    value       REAL NOT NULL,
+    knowable_at TEXT NOT NULL,
+    accn        TEXT NOT NULL,
+    PRIMARY KEY (symbol, concept, period_end, accn)
+);
+"""
+
+FUNDAMENTALS_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_fundamentals_knowable
+    ON fundamentals (concept, knowable_at, symbol);
+"""
+
+ALL = [BARS, BARS_INDEX, UNIVERSE, UNIVERSE_INDEX, FUNDAMENTALS, FUNDAMENTALS_INDEX]

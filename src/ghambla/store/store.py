@@ -28,6 +28,22 @@ class Bar:
     volume: int
 
 
+@dataclass(frozen=True)
+class Fact:
+    """One reported financial figure.
+
+    `knowable_at` is the SEC filing date, not the period end. A quarter ending
+    31 March is not knowable until the filing lands weeks later, and treating
+    the period end as the knowable date is a classic lookahead bug.
+    """
+    symbol: str
+    concept: str
+    period_end: dt.date
+    value: float
+    knowable_at: dt.date
+    accn: str
+
+
 class FeatureStore:
     """The only way to read market data.
 
@@ -99,6 +115,48 @@ class FeatureStore:
             (as_of.isoformat(), *symbols),
         )
         return {r["symbol"]: self._to_bar(r) for r in cur.fetchall()}
+
+    def upsert_fundamentals(self, facts: Iterable["Fact"]) -> int:
+        rows = [(f.symbol, f.concept, f.period_end.isoformat(), f.value,
+                 f.knowable_at.isoformat(), f.accn) for f in facts]
+        self._conn.executemany(
+            "INSERT INTO fundamentals (symbol, concept, period_end, value, knowable_at, accn)"
+            " VALUES (?,?,?,?,?,?)"
+            " ON CONFLICT(symbol, concept, period_end, accn) DO UPDATE SET"
+            " value=excluded.value, knowable_at=excluded.knowable_at",
+            rows,
+        )
+        self._conn.commit()
+        return len(rows)
+
+    def latest_fundamentals_as_of(self, as_of: dt.date, concept: str,
+                                  symbols: Sequence[str]) -> dict[str, "Fact"]:
+        """Most recently *filed* value of `concept` per symbol, as of a date.
+
+        Ordered by filing date rather than period end: a restatement filed
+        later supersedes, and a period that had not been reported yet is
+        invisible. Ties on filing date break on the later period.
+        """
+        if not symbols:
+            return {}
+        placeholders = ",".join("?" * len(symbols))
+        cur = self._conn.execute(
+            f"SELECT f.* FROM fundamentals f JOIN ("
+            f"  SELECT symbol, MAX(knowable_at || '|' || period_end) AS k"
+            f"  FROM fundamentals"
+            f"  WHERE concept = ? AND knowable_at <= ? AND symbol IN ({placeholders})"
+            f"  GROUP BY symbol"
+            f") m ON f.symbol = m.symbol"
+            f"   AND f.knowable_at || '|' || f.period_end = m.k"
+            f" WHERE f.concept = ?",
+            (concept, as_of.isoformat(), *symbols, concept),
+        )
+        return {r["symbol"]: Fact(symbol=r["symbol"], concept=r["concept"],
+                                  period_end=dt.date.fromisoformat(r["period_end"]),
+                                  value=r["value"],
+                                  knowable_at=dt.date.fromisoformat(r["knowable_at"]),
+                                  accn=r["accn"])
+                for r in cur.fetchall()}
 
     def set_universe(self, effective: dt.date, symbols: Sequence[str]) -> None:
         self._conn.executemany(
