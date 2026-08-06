@@ -31,6 +31,21 @@ python3 -m venv .venv
 Ingest is deliberately paced so it does not hammer a free data endpoint. The
 backtest over the full window takes about 13 minutes.
 
+## Results so far
+
+Both signals tested, both fail Gate 0, on dated S&P 500 membership after IBKR
+Tiered commission and 5bp spread, 2018-01-01 to 2026-08-01:
+
+| | Momentum (12-1) | Value+Quality | SPY |
+|---|---|---|---|
+| Total return | +239.49% | +119.80% | +177.94% |
+| CAGR | +15.32% | +9.62% | +12.66% |
+| Sharpe | 0.60 | 0.51 | 0.72 |
+| Max drawdown | -36.31% | -36.01% | -34.10% |
+| Sharpe edge | **-0.12** | **-0.21** | — |
+
+Neither beats buying SPY and doing nothing. Both take more risk to get there.
+
 ## Current result
 
 12-1 momentum, top 10 names, rebalanced every 21 days, 2018-01-01 to
