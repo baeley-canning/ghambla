@@ -10,6 +10,10 @@ import pathlib
 import sys
 
 from .backtest import run_backtest
+from .broker import SimulatedBroker
+from .cycle import DailyCycle
+from .journal import Journal
+from .risk import RiskGate, RiskLimits
 from .evaluate import buy_and_hold, compute_metrics, format_report
 from .edgar import EdgarClient, fetch_fundamentals
 from .signals.fundamental import FundamentalSignal
@@ -27,6 +31,8 @@ from .universe import BENCHMARK, WARMUP_DAYS
 
 DEFAULT_DB = "data/market.db"
 COVERAGE_PATH = "data/coverage.json"
+JOURNAL_PATH = "data/journal.jsonl"
+SIM_STATE_PATH = "data/sim_account.json"
 
 
 def _date(s: str) -> dt.date:
@@ -132,6 +138,10 @@ def cmd_ingest_fundamentals(args) -> int:
     return 0
 
 
+def _signals(names):
+    return {n: _signal(n) for n in names}
+
+
 def _signal(name):
     return {"momentum": MomentumSignal, "fundamental": FundamentalSignal}[name]()
 
@@ -175,6 +185,76 @@ def cmd_backtest(args) -> int:
     return 0
 
 
+def cmd_cycle(args) -> int:
+    """Run one decision cycle against a broker."""
+    if not pathlib.Path(args.db).exists():
+        print(f"No database at {args.db}. Run `ingest` first.", file=sys.stderr)
+        return 1
+
+    store = FeatureStore(args.db)
+    journal = Journal(args.journal)
+    try:
+        if args.broker == "simulated":
+            broker = SimulatedBroker(cash=args.cash, state_path=args.sim_state)
+        else:
+            from .ibkr import IBKRBroker
+            broker = IBKRBroker(host=args.host, port=args.port, live=args.live)
+            if args.live:
+                print("!! LIVE MODE: orders will use real money.", file=sys.stderr)
+
+        try:
+            broker.connect()
+        except (ConnectionRefusedError, OSError, TimeoutError) as exc:
+            print(f"Could not reach the broker at {getattr(broker, 'host', '?')}:"
+                  f"{getattr(broker, 'port', '?')} — {exc}.\n"
+                  f"IB Gateway or TWS must be running with the API enabled "
+                  f"(paper Gateway 4002, live Gateway 4001, "
+                  f"paper TWS 7497, live TWS 7496).", file=sys.stderr)
+            return 1
+        try:
+            cycle = DailyCycle(
+                store, _signals(args.signals), broker, journal,
+                mode=args.broker if args.broker != "simulated" else "simulated",
+                risk_gate=RiskGate(RiskLimits(max_position_weight=args.max_weight)),
+                top_n=args.top_n)
+            as_of = args.as_of or (store.trading_dates(
+                args.as_of_floor, dt.date.today()) or [dt.date.today()])[-1]
+            result = cycle.run(as_of, halt=args.halt)
+        finally:
+            broker.disconnect()
+
+        print(f"\nCycle {result.as_of} via {broker.name}")
+        print(f"  equity     {result.equity:,.2f}")
+        print(f"  targets    {len(result.targets)}")
+        print(f"  orders     {len(result.orders)}  fills {len(result.fills)}")
+        if result.halted:
+            print("  HALTED — no orders placed")
+        for reason in result.reasons:
+            print(f"    - {reason}")
+        print(f"  journal    {journal.count()} records at {journal.path}")
+    finally:
+        store.close()
+    return 0
+
+
+def cmd_journal(args) -> int:
+    journal = Journal(args.journal)
+    rows = list(journal.read())
+    if not rows:
+        print("Journal is empty.")
+        return 0
+    print(f"{len(rows)} cycles in {journal.path}\n")
+    for r in rows[-args.tail:]:
+        held = ", ".join(f"{s}:{q:.2f}" for s, q in sorted(r["positions"].items())) or "flat"
+        print(f"{r['as_of']}  {r['mode']:<10} equity {r['equity']:>12,.2f}  "
+              f"orders {len(r['orders']):>2}  {held}")
+        for v in r["risk_vetoes"]:
+            print(f"    veto: {v}")
+        for n in r.get("notes", []):
+            print(f"    note: {n}")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="ghambla")
     p.add_argument("--db", default=DEFAULT_DB)
@@ -207,6 +287,29 @@ def main(argv=None) -> int:
     pb.add_argument("--top-n", type=int, default=10)
     pb.add_argument("--rebalance-every", type=int, default=21)
     pb.set_defaults(func=cmd_backtest)
+
+    pc = sub.add_parser("cycle", help="run one decision cycle against a broker")
+    pc.add_argument("--broker", choices=["simulated", "ibkr"], default="simulated")
+    pc.add_argument("--signals", nargs="+", choices=["momentum", "fundamental"],
+                    default=["momentum", "fundamental"])
+    pc.add_argument("--as-of", type=_date, default=None)
+    pc.add_argument("--as-of-floor", type=_date, default=_date("2018-01-01"))
+    pc.add_argument("--cash", type=float, default=10_000.0)
+    pc.add_argument("--top-n", type=int, default=10)
+    pc.add_argument("--max-weight", type=float, default=0.20)
+    pc.add_argument("--journal", default=JOURNAL_PATH)
+    pc.add_argument("--sim-state", default=SIM_STATE_PATH)
+    pc.add_argument("--host", default="127.0.0.1")
+    pc.add_argument("--port", type=int, default=None)
+    pc.add_argument("--live", action="store_true",
+                    help="use the live gateway port; the account you log in decides real money")
+    pc.add_argument("--halt", action="store_true", help="kill switch: block all trading")
+    pc.set_defaults(func=cmd_cycle)
+
+    pj = sub.add_parser("journal", help="show recent decision cycles")
+    pj.add_argument("--journal", default=JOURNAL_PATH)
+    pj.add_argument("--tail", type=int, default=10)
+    pj.set_defaults(func=cmd_journal)
 
     args = p.parse_args(argv)
     return args.func(args)

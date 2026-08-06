@@ -153,3 +153,28 @@ def test_floating_point_noise_is_tolerated():
 def test_one_missed_fill_trips_the_tolerance():
     """Tolerances must be tight enough to catch a real error, not just noise."""
     assert not reconcile({"AAA": 10.0}, 500.0, snap(500.0, AAA=10.01)).ok
+
+
+# --- simulated broker persistence ---
+
+def test_state_survives_a_restart(tmp_path):
+    """A multi-day rehearsal restarts the process each cycle; without
+    persistence the broker forgets its positions and reconciliation halts."""
+    path = tmp_path / "acct.json"
+    first = SimulatedBroker(cash=10_000.0, spread_bps=0.0, state_path=path)
+    first.connect()
+    first.place(Order("AAA", "BUY", 10), 100.0)
+    first.disconnect()
+
+    second = SimulatedBroker(cash=10_000.0, spread_bps=0.0, state_path=path)
+    second.connect()
+    snap = second.snapshot()
+    assert snap.positions["AAA"].shares == pytest.approx(10)
+    assert snap.cash < 10_000.0
+
+
+def test_no_state_path_means_no_persistence(tmp_path):
+    b = SimulatedBroker(cash=10_000.0)
+    b.connect()
+    b.disconnect()
+    assert list(tmp_path.iterdir()) == []

@@ -8,6 +8,8 @@ risk checks and journalling all live above this line.
 `Position` and `AccountSnapshot` are what reconciliation compares against.
 """
 import datetime as dt
+import json
+import pathlib
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -73,17 +75,43 @@ class SimulatedBroker:
 
     name = "simulated"
 
-    def __init__(self, cash: float = 10_000.0, spread_bps: float = 5.0) -> None:
+    def __init__(self, cash: float = 10_000.0, spread_bps: float = 5.0,
+                 state_path: str | pathlib.Path | None = None) -> None:
         self._cash = cash
         self._positions: dict[str, Position] = {}
         self._half_spread = spread_bps / 20_000.0
         self._connected = False
+        self._state_path = pathlib.Path(state_path) if state_path else None
 
     def connect(self) -> None:
+        """Load persisted state if there is any.
+
+        Without this a multi-day rehearsal starts flat every run, and
+        reconciliation correctly halts on the second cycle because the journal
+        remembers positions the broker has forgotten.
+        """
         self._connected = True
+        if self._state_path and self._state_path.exists():
+            data = json.loads(self._state_path.read_text())
+            self._cash = float(data["cash"])
+            self._positions = {
+                s: Position(s, float(p["shares"]), float(p["average_cost"]))
+                for s, p in data.get("positions", {}).items()
+            }
 
     def disconnect(self) -> None:
         self._connected = False
+        self._save()
+
+    def _save(self) -> None:
+        if not self._state_path:
+            return
+        self._state_path.parent.mkdir(parents=True, exist_ok=True)
+        self._state_path.write_text(json.dumps({
+            "cash": self._cash,
+            "positions": {s: {"shares": p.shares, "average_cost": p.average_cost}
+                          for s, p in self._positions.items()},
+        }, indent=2, sort_keys=True))
 
     def snapshot(self) -> AccountSnapshot:
         return AccountSnapshot(cash=self._cash, positions=dict(self._positions))
@@ -125,5 +153,6 @@ class SimulatedBroker:
                 self._positions[order.symbol] = Position(
                     order.symbol, remaining, held.average_cost)
 
+        self._save()
         return Fill(symbol=order.symbol, side=order.side, shares=order.shares,
                     price=price, commission=commission, at=dt.datetime.now(dt.UTC))

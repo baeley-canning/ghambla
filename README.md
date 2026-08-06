@@ -3,7 +3,13 @@
 An automated trading system for US equities and ETFs, executing through
 Interactive Brokers.
 
-**Status: Phase 1 complete. Gate 0 FAILED — not cleared for paper trading.**
+**Status: Phases 1–3 built. Gate 0 FAILED — no strategy is cleared to trade.**
+
+The machinery is complete and tested: point-in-time data, two signals, risk
+gate, journal, reconciliation, broker adapters, daily cycle. What it does not
+have is an edge. Both signals lose to SPY on risk-adjusted terms, so running
+this against money — paper or real — would be exercising the plumbing, not
+pursuing a strategy that works.
 
 ## What this is
 
@@ -18,6 +24,29 @@ fail because the backtest quietly uses information that was not available at
 the time, so the number it prints is fiction. This system is built so that
 "no edge found" is a result it can actually report.
 
+## Architecture
+
+```
+data → point-in-time store → signals → allocator → portfolio → RISK GATE → broker
+                                                                    ↓
+                                                    reconcile + journal (always)
+```
+
+| Module | Responsibility |
+|---|---|
+| `store/` | Point-in-time feature store. Every fact carries `knowable_at`; no read can return the future. |
+| `sp500.py` | Dated index membership, so the universe is who was actually in the index that day. |
+| `edgar.py` | SEC fundamentals keyed on filing date. |
+| `signals/` | `momentum` (12-1), `fundamental` (value + quality). Pure functions over the store. |
+| `allocator.py` | Averages percentile ranks, so no signal dominates by emitting bigger numbers. |
+| `portfolio.py` | Scores → equal-weight long-only targets. |
+| `risk.py` | The veto layer. Can only reduce or block. Fails closed. |
+| `broker.py` | One interface: simulated, or IBKR. Sizing and risk live above it. |
+| `reconcile.py` | Compares belief against the broker. Any break halts trading. |
+| `journal.py` | Append-only JSONL of every decision and its reasoning. |
+| `cycle.py` | One run of the whole thing. |
+| `ibkr.py` | IBKR adapter. **Unit-tested only — never run against a real gateway.** |
+
 ## Running it
 
 ```bash
@@ -30,6 +59,18 @@ python3 -m venv .venv
 
 Ingest is deliberately paced so it does not hammer a free data endpoint. The
 backtest over the full window takes about 13 minutes.
+
+Run one decision cycle, and inspect what it decided:
+
+```bash
+.venv/bin/python -m ghambla.cli cycle --broker simulated
+.venv/bin/python -m ghambla.cli cycle --broker simulated --halt   # kill switch
+.venv/bin/python -m ghambla.cli journal --tail 10
+```
+
+`--broker ibkr` targets IB Gateway or TWS (paper Gateway 4002, live 4001;
+paper TWS 7497, live 7496). `--live` only selects the live port — **the account
+you log the gateway into is what decides whether the money is real.**
 
 ## Results so far
 
