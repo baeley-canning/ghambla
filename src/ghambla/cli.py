@@ -15,9 +15,11 @@ from .cycle import DailyCycle
 from .journal import Journal
 from .risk import RiskGate, RiskLimits
 from .evaluate import buy_and_hold, compute_metrics, format_report
+from .walkforward import format_walk_forward, run_walk_forward
 from .edgar import EdgarClient, fetch_fundamentals
 from .signals.fundamental import FundamentalSignal
 from .signals.momentum import MomentumSignal
+from .signals.news import CachedClassifier, NewsSignal, StubClassifier
 from .sp500 import (
     ever_members_between,
     fetch_membership,
@@ -25,7 +27,13 @@ from .sp500 import (
     snapshot_dates,
     to_yahoo_symbol,
 )
-from .store.ingest import YahooDataSource, YahooSplitSource, ingest, ingest_splits
+from .store.ingest import (
+    YahooDataSource,
+    YahooSplitSource,
+    ingest,
+    ingest_news,
+    ingest_splits,
+)
 from .store.store import FeatureStore
 from .universe import BENCHMARK, WARMUP_DAYS
 
@@ -109,6 +117,48 @@ def cmd_ingest_splits(args) -> int:
     return 0
 
 
+def cmd_ingest_news(args) -> int:
+    """Fetch news items for the dated universe (stub source by default)."""
+    if not pathlib.Path(args.db).exists():
+        print(f"No database at {args.db}. Run `ingest` first.", file=sys.stderr)
+        return 1
+
+    store = FeatureStore(args.db)
+    try:
+        warmup_start = args.start - dt.timedelta(days=WARMUP_DAYS)
+        spans = fetch_membership()
+        symbols = sorted({to_yahoo_symbol(t)
+                          for t in ever_members_between(spans, warmup_start, args.end)})
+        print(f"Fetching news for {len(symbols)} symbols ...")
+
+        def progress(done, total, symbol):
+            if done % 100 == 0 or done == total:
+                print(f"  {done}/{total} ... {symbol}", flush=True)
+
+        from .store.ingest import NewsSource
+        from .store.store import NewsItem
+
+        class StubNewsSource:
+            """Canned news so the pipeline is exercisable without an API key."""
+
+            def fetch(self, symbol: str) -> list[NewsItem]:
+                return [
+                    NewsItem(symbol=symbol,
+                             published_at=dt.datetime.now(dt.UTC),
+                             source="stub",
+                             headline=f"{symbol} beats expectations",
+                             body="revenue growth and profit beat estimates",
+                             content_hash=f"stub-{symbol}",
+                             knowable_at=dt.date.today()),
+                ]
+
+        n, failed = ingest_news(store, StubNewsSource(), symbols, on_progress=progress)
+        print(f"\nStored {n} news items. {len(failed)} lookups failed.")
+    finally:
+        store.close()
+    return 0
+
+
 def cmd_ingest_fundamentals(args) -> int:
     if not pathlib.Path(args.db).exists():
         print(f"No database at {args.db}. Run `ingest` first.", file=sys.stderr)
@@ -143,6 +193,8 @@ def _signals(names):
 
 
 def _signal(name):
+    if name == "news":
+        return NewsSignal(CachedClassifier(StubClassifier(), "data/news_cache.json"))
     return {"momentum": MomentumSignal, "fundamental": FundamentalSignal}[name]()
 
 
@@ -237,6 +289,31 @@ def cmd_cycle(args) -> int:
     return 0
 
 
+def cmd_evaluate(args) -> int:
+    """Walk-forward Gate 0 evaluation for a signal, with a held-out tail."""
+    if not pathlib.Path(args.db).exists():
+        print(f"No database at {args.db}. Run `ingest` first.", file=sys.stderr)
+        return 1
+
+    store = FeatureStore(args.db)
+    try:
+        signal = _signal(args.signal)
+        dates = store.trading_dates(args.start, args.end)
+        if not dates:
+            print("No data in range. Run `ingest` first.", file=sys.stderr)
+            return 1
+
+        result = run_walk_forward(store, signal, args.start, args.end,
+                                  n_windows=args.windows,
+                                  holdout_frac=args.holdout,
+                                  initial_cash=args.cash, top_n=args.top_n,
+                                  rebalance_every=args.rebalance_every)
+        print(format_walk_forward(result))
+        return 0
+    finally:
+        store.close()
+
+
 def cmd_journal(args) -> int:
     journal = Journal(args.journal)
     rows = list(journal.read())
@@ -279,8 +356,13 @@ def main(argv=None) -> int:
     pf.add_argument("--pause", type=float, default=0.12)
     pf.set_defaults(func=cmd_ingest_fundamentals)
 
+    pn = sub.add_parser("ingest-news", help="download news items for the universe")
+    pn.add_argument("--start", type=_date, default=_date("2018-01-01"))
+    pn.add_argument("--end", type=_date, default=dt.date.today())
+    pn.set_defaults(func=cmd_ingest_news)
+
     pb = sub.add_parser("backtest", help="run a backtest")
-    pb.add_argument("--signal", choices=["momentum", "fundamental"], default="momentum")
+    pb.add_argument("--signal", choices=["momentum", "fundamental", "news"], default="momentum")
     pb.add_argument("--start", type=_date, default=_date("2018-01-01"))
     pb.add_argument("--end", type=_date, default=dt.date.today())
     pb.add_argument("--cash", type=float, default=10_000.0)
@@ -288,9 +370,22 @@ def main(argv=None) -> int:
     pb.add_argument("--rebalance-every", type=int, default=21)
     pb.set_defaults(func=cmd_backtest)
 
+    pe = sub.add_parser("evaluate", help="walk-forward Gate 0 evaluation")
+    pe.add_argument("--signal", choices=["momentum", "fundamental", "news"], default="momentum")
+    pe.add_argument("--start", type=_date, default=_date("2018-01-01"))
+    pe.add_argument("--end", type=_date, default=dt.date.today())
+    pe.add_argument("--windows", type=int, default=4,
+                    help="number of research windows before the holdout")
+    pe.add_argument("--holdout", type=float, default=0.20,
+                    help="fraction of the period held out untouched at the end")
+    pe.add_argument("--cash", type=float, default=10_000.0)
+    pe.add_argument("--top-n", type=int, default=10)
+    pe.add_argument("--rebalance-every", type=int, default=21)
+    pe.set_defaults(func=cmd_evaluate)
+
     pc = sub.add_parser("cycle", help="run one decision cycle against a broker")
     pc.add_argument("--broker", choices=["simulated", "ibkr"], default="simulated")
-    pc.add_argument("--signals", nargs="+", choices=["momentum", "fundamental"],
+    pc.add_argument("--signals", nargs="+", choices=["momentum", "fundamental", "news"],
                     default=["momentum", "fundamental"])
     pc.add_argument("--as-of", type=_date, default=None)
     pc.add_argument("--as-of-floor", type=_date, default=_date("2018-01-01"))

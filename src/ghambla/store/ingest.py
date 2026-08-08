@@ -14,7 +14,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Protocol, Sequence
 
-from .store import Bar, FeatureStore, Split
+from .store import Bar, FeatureStore, NewsItem, Split
 
 CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/"
 USER_AGENT = "Mozilla/5.0 (compatible; ghambla research)"
@@ -107,6 +107,31 @@ def ingest_splits(store: FeatureStore, source, symbols: Sequence[str],
         else:
             if splits:
                 total += store.upsert_splits(splits)
+        if on_progress:
+            on_progress(i + 1, len(symbols), symbol)
+    return total, failed
+
+
+class NewsSource(Protocol):
+    """Fetches news items for a symbol. Implementations are the seam for a
+    real news API; tests and the CLI stub use a canned source."""
+
+    def fetch(self, symbol: str) -> list[NewsItem]: ...
+
+
+def ingest_news(store: FeatureStore, source: NewsSource,
+                symbols: Sequence[str], on_progress=None) -> tuple[int, dict[str, str]]:
+    """Fetch and store news for each symbol, surviving individual failures."""
+    total = 0
+    failed: dict[str, str] = {}
+    for i, symbol in enumerate(symbols):
+        try:
+            items = source.fetch(symbol)
+        except Exception as exc:
+            failed[symbol] = f"{type(exc).__name__}: {exc}"
+        else:
+            if items:
+                total += store.upsert_news(items)
         if on_progress:
             on_progress(i + 1, len(symbols), symbol)
     return total, failed

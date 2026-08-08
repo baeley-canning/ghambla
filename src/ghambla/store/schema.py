@@ -67,5 +67,23 @@ CREATE TABLE IF NOT EXISTS splits (
 );
 """
 
+NEWS = """
+CREATE TABLE IF NOT EXISTS news (
+    symbol      TEXT NOT NULL,
+    published_at TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    headline    TEXT NOT NULL,
+    body        TEXT NOT NULL DEFAULT '',
+    content_hash TEXT NOT NULL,
+    knowable_at TEXT NOT NULL,
+    PRIMARY KEY (symbol, published_at, content_hash)
+);
+"""
+
+NEWS_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_news_knowable
+    ON news (symbol, knowable_at);
+"""
+
 ALL = [BARS, BARS_INDEX, UNIVERSE, UNIVERSE_INDEX,
-       FUNDAMENTALS, FUNDAMENTALS_INDEX, SPLITS]
+       FUNDAMENTALS, FUNDAMENTALS_INDEX, SPLITS, NEWS, NEWS_INDEX]

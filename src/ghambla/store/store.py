@@ -58,6 +58,25 @@ def split_factor_after(splits: list[tuple[dt.date, float]], after: dt.date) -> f
 
 
 @dataclass(frozen=True)
+class NewsItem:
+    """One news item.
+
+    `published_at` is when the item was published; `knowable_at` is when it
+    became knowable to a trader (the publish timestamp, truncated to a date
+    for the store's date-keyed reads). `content_hash` lets the LLM cache key
+    on the exact text, so a backtest is deterministic and never re-bills an
+    API call for the same headline.
+    """
+    symbol: str
+    published_at: dt.datetime
+    source: str
+    headline: str
+    body: str
+    content_hash: str
+    knowable_at: dt.date
+
+
+@dataclass(frozen=True)
 class Fact:
     """One reported financial figure.
 
@@ -175,6 +194,45 @@ class FeatureStore:
         for r in cur.fetchall():
             out.setdefault(r["symbol"], []).append(
                 (dt.date.fromisoformat(r["date"]), r["ratio"]))
+        return out
+
+    def upsert_news(self, items: Iterable["NewsItem"]) -> int:
+        rows = [(n.symbol, n.published_at.isoformat(), n.source, n.headline,
+                 n.body, n.content_hash, n.knowable_at.isoformat())
+                for n in items]
+        self._conn.executemany(
+            "INSERT INTO news (symbol, published_at, source, headline, body,"
+            " content_hash, knowable_at) VALUES (?,?,?,?,?,?,?)"
+            " ON CONFLICT(symbol, published_at, content_hash) DO UPDATE SET"
+            " source=excluded.source, headline=excluded.headline,"
+            " body=excluded.body, knowable_at=excluded.knowable_at",
+            rows,
+        )
+        self._conn.commit()
+        return len(rows)
+
+    def news_as_of(self, as_of: dt.date, symbols: Sequence[str],
+                   lookback: int = 10) -> dict[str, list["NewsItem"]]:
+        """The most recent `lookback` news items per symbol knowable at `as_of`.
+
+        Returned newest-first so callers can take the latest item directly.
+        """
+        out: dict[str, list[NewsItem]] = {}
+        if not symbols:
+            return out
+        placeholders = ",".join("?" * len(symbols))
+        cur = self._conn.execute(
+            f"SELECT * FROM news WHERE knowable_at <= ? AND symbol IN ({placeholders})"
+            f" ORDER BY published_at DESC LIMIT ?",
+            (as_of.isoformat(), *symbols, lookback * len(symbols)),
+        )
+        for r in cur.fetchall():
+            out.setdefault(r["symbol"], []).append(NewsItem(
+                symbol=r["symbol"],
+                published_at=dt.datetime.fromisoformat(r["published_at"]),
+                source=r["source"], headline=r["headline"], body=r["body"],
+                content_hash=r["content_hash"],
+                knowable_at=dt.date.fromisoformat(r["knowable_at"])))
         return out
 
     def upsert_fundamentals(self, facts: Iterable["Fact"]) -> int:
