@@ -255,3 +255,21 @@ def test_cycle_rejects_an_unknown_weighting(store, tmp_path):
     with pytest.raises(ValueError, match="weighting"):
         DailyCycle(store, {"m": Likes(["AAA"])}, SimulatedBroker(cash=1.0),
                    Journal(tmp_path / "w2.jsonl"), mode="paper", weighting="magic")
+
+
+def test_cycle_regime_filter_holds_cash_when_it_cannot_evaluate(store, tmp_path):
+    """Fails closed, exactly as the backtest does. No benchmark history here."""
+    broker = SimulatedBroker(cash=10_000.0, spread_bps=0.0)
+    broker.connect()
+    cycle = DailyCycle(store, {"m": Likes(["AAA", "BBB"])}, broker,
+                       Journal(tmp_path / "rg.jsonl"), mode="paper",
+                       risk_gate=RiskGate(RiskLimits(max_position_weight=1.0)),
+                       top_n=2, regime_filter=True, regime_lookback=5)
+    r = cycle.run(d("2026-08-06"))
+    assert r.targets == {}
+    assert broker.snapshot().positions == {}
+
+
+def test_cycle_regime_filter_is_off_by_default(store, tmp_path):
+    cycle, _, _ = make(store, tmp_path)
+    assert set(cycle.run(d("2026-08-06")).targets) == {"AAA", "BBB"}

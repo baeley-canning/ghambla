@@ -11,7 +11,7 @@ import sys
 
 from .backtest import WEIGHTINGS, run_backtest, signals_name
 from .broker import SimulatedBroker
-from .cycle import DailyCycle
+from .cycle import CASH_BUFFER, DailyCycle
 from .journal import Journal
 from .risk import RiskGate, RiskLimits
 from .evaluate import buy_and_hold, compute_metrics, format_report
@@ -222,7 +222,8 @@ def cmd_backtest(args) -> int:
                               rebalance_every=args.rebalance_every,
                               weighting=args.weighting,
                               regime_filter=args.regime_filter,
-                              risk_gate=RiskGate() if args.risk_gate else None)
+                              risk_gate=RiskGate() if (args.risk_gate or args.live_parity) else None,
+                              cash_buffer=CASH_BUFFER if args.live_parity else 0.0)
         bench = buy_and_hold(store, BENCHMARK, args.start, args.end, initial_cash=args.cash)
 
         strat_m = compute_metrics(result.dates, result.equity, len(result.trades))
@@ -319,7 +320,8 @@ def cmd_evaluate(args) -> int:
                                   rebalance_every=args.rebalance_every,
                                   weighting=args.weighting,
                               regime_filter=args.regime_filter,
-                              risk_gate=RiskGate() if args.risk_gate else None)
+                              risk_gate=RiskGate() if (args.risk_gate or args.live_parity) else None,
+                              cash_buffer=CASH_BUFFER if args.live_parity else 0.0)
         print(format_walk_forward(result))
         return 0
     finally:
@@ -386,6 +388,8 @@ def main(argv=None) -> int:
                     help="hold cash while the benchmark is below its 200d average")
     pb.add_argument("--risk-gate", action="store_true",
                     help="apply the live risk gate, so Gate 0 measures what would run")
+    pb.add_argument("--live-parity", action="store_true",
+                    help="measure exactly what the live cycle runs: risk gate on, cash buffer on")
     pb.set_defaults(func=cmd_backtest)
 
     pe = sub.add_parser("evaluate", help="walk-forward Gate 0 evaluation")
@@ -405,6 +409,8 @@ def main(argv=None) -> int:
                     help="hold cash while the benchmark is below its 200d average")
     pe.add_argument("--risk-gate", action="store_true",
                     help="apply the live risk gate, so Gate 0 measures what would run")
+    pe.add_argument("--live-parity", action="store_true",
+                    help="measure exactly what the live cycle runs: risk gate on, cash buffer on")
     pe.set_defaults(func=cmd_evaluate)
 
     pc = sub.add_parser("cycle", help="run one decision cycle against a broker")

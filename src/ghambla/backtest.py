@@ -95,7 +95,7 @@ def run_backtest(store: FeatureStore, signals, start: dt.date, end: dt.date,
                  stale_days: int = 5, allocator: RankAllocator | None = None,
                  weighting: str = "equal", vol_lookback: int = 252,
                  regime_filter: bool = False, regime_lookback: int = 200,
-                 risk_gate=None
+                 risk_gate=None, cash_buffer: float = 0.0
                  ) -> BacktestResult:
     """`signals` is one signal, or a `name -> signal` mapping combined by rank.
 
@@ -156,7 +156,15 @@ def run_backtest(store: FeatureStore, signals, start: dt.date, end: dt.date,
         if pending is not None:
             opens = {s: b.open for s, b in latest.items() if b.date == today}
             targets = dict(pending)
-            equity_at_open = cash + sum(sh * opens.get(sym, 0.0) for sym, sh in positions.items())
+            # The live cycle holds back CASH_BUFFER (2%) because sizing to
+            # exactly 100% invested guarantees the final buy is rejected —
+            # commission has to come from somewhere and a fill can print
+            # slightly above the reference price. A backtest that deploys 100%
+            # books fills the live system would refuse, so Gate 0 counts trades
+            # that could not happen.
+            equity_at_open = (cash + sum(sh * opens.get(sym, 0.0)
+                                         for sym, sh in positions.items())) \
+                * (1.0 - cash_buffer)
 
             for sym in sorted(set(positions) | set(targets)):
                 px = opens.get(sym)

@@ -427,3 +427,27 @@ def test_gate_sees_yesterdays_equity_not_todays(store):
     # The fixture's price rises every day, so once invested, equity must move.
     assert any(eq != prev for eq, prev in seen), \
         "previous_equity always equalled equity: the daily-loss limit is dead"
+
+
+def test_cash_buffer_leaves_equity_uninvested(store):
+    """The cycle holds back 2% so the last buy is not rejected for commission.
+
+    A backtest deploying 100% books fills the live system would refuse.
+    """
+    full = run_backtest(store, AlwaysBuy(), d("2026-01-01"), d("2026-02-28"),
+                        initial_cash=10_000.0, top_n=1)
+    buffered = run_backtest(store, AlwaysBuy(), d("2026-01-01"), d("2026-02-28"),
+                            initial_cash=10_000.0, top_n=1, cash_buffer=0.02)
+    spent_full = sum(t.shares * t.price for t in full.trades if t.side == "BUY")
+    spent_buf = sum(t.shares * t.price for t in buffered.trades if t.side == "BUY")
+    assert spent_buf < spent_full
+    assert spent_buf == pytest.approx(spent_full * 0.98, rel=0.05)
+
+
+def test_cash_buffer_defaults_to_zero(store):
+    """Recorded Gate 0 numbers were produced with no buffer."""
+    a = run_backtest(store, AlwaysBuy(), d("2026-01-01"), d("2026-02-28"),
+                     initial_cash=10_000.0)
+    b = run_backtest(store, AlwaysBuy(), d("2026-01-01"), d("2026-02-28"),
+                     initial_cash=10_000.0, cash_buffer=0.0)
+    assert a.equity == b.equity

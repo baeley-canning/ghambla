@@ -25,6 +25,7 @@ from .backtest import WEIGHTINGS, weigh
 from .broker import Broker, Order, OrderError
 from .journal import DecisionRecord, Journal
 from .reconcile import reconcile
+from .regime import trend_filter
 from .risk import RiskDecision, RiskGate, RiskState
 from .store.store import FeatureStore
 from .vol import TRADING_DAYS_PER_YEAR
@@ -55,7 +56,9 @@ class DailyCycle:
                  allocator: RankAllocator | None = None,
                  risk_gate: RiskGate | None = None,
                  top_n: int = 10, cash_buffer: float = CASH_BUFFER,
-                 weighting: str = "equal") -> None:
+                 weighting: str = "equal",
+                 regime_filter: bool = False,
+                 regime_lookback: int = 200) -> None:
         # Validate eagerly so a bad weighting fails at construction, not
         # mid-trading-day when the cycle is already running.
         if weighting not in WEIGHTINGS:
@@ -70,6 +73,8 @@ class DailyCycle:
         self.top_n = top_n
         self.cash_buffer = cash_buffer
         self.weighting = weighting
+        self.regime_filter = regime_filter
+        self.regime_lookback = regime_lookback
 
     def run(self, as_of: dt.date, halt: bool = False) -> CycleResult:
         started = dt.datetime.now(dt.UTC)
@@ -108,10 +113,20 @@ class DailyCycle:
             TRADING_DAYS_PER_YEAR)}
 
         # --- risk ---
+        # `is not True`, not `is False`, because trend_filter returns None when
+        # it cannot be evaluated and an unknown regime must fail closed —
+        # treating "cannot tell" as "risk-on" would take full exposure precisely
+        # when the data is missing.
+        risk_on = trend_filter(self.store, as_of,
+                               lookback=self.regime_lookback) \
+            if self.regime_filter else None
+        if self.regime_filter and risk_on is not True:
+            risk_on = False
         state = RiskState(equity=equity, peak_equity=peak_equity,
                           previous_equity=previous_equity, data_as_of=data_as_of,
                           today=as_of, reconciled=recon_ok, halted=halt,
-                          halt_reason="manual halt requested" if halt else "")
+                          halt_reason="manual halt requested" if halt else "",
+                          risk_on=risk_on)
         decision = self.risk_gate.evaluate(wanted, state)
         reasons = recon_breaks + decision.vetoes
 
