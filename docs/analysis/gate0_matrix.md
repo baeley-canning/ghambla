@@ -81,4 +81,120 @@ be represented as validated.
 
 ## Results
 
-*(empty — to be filled in after the runs, verbatim, including failures)*
+Run once each on 2000-01-01..2026-08-01, top 10, rebalance 21d, against a
+snapshot of the store taken after the corrected 30y ingest. Pasted verbatim.
+
+### PRIMARY — momentum, equal, --regime-filter --live-parity
+
+```
+Signal: momentum_12_1
+Period: 2000-01-01 .. 2026-08-01  (4 research windows + 1 holdout)
+
+Window                   Type      Sharpe edge Drawdown ok  Verdict
+-------------------------------------------------------------------
+2000-01-01..2005-04-24   research        +0.65         YES  PASS
+2005-04-25..2010-08-18   research        +0.24         YES  FAIL
+2010-08-19..2015-12-11   research        -0.22          NO  FAIL
+2015-12-12..2021-04-06   research        -0.14         YES  FAIL
+2021-04-07..2026-08-01   holdout         -1.00          NO  FAIL
+
+Gate 0 (walk-forward): FAIL (1/4 research windows passed (need > 50%); holdout failed)
+Do not proceed to paper trading.
+```
+
+### Secondary 1 — momentum, --live-parity (no regime filter)
+
+```
+Signal: momentum_12_1
+Period: 2000-01-01 .. 2026-08-01  (4 research windows + 1 holdout)
+
+Window                   Type      Sharpe edge Drawdown ok  Verdict
+-------------------------------------------------------------------
+2000-01-01..2005-04-24   research        -0.03          NO  FAIL
+2005-04-25..2010-08-18   research        +0.05          NO  FAIL
+2010-08-19..2015-12-11   research        -0.21          NO  FAIL
+2015-12-12..2021-04-06   research        -0.28          NO  FAIL
+2021-04-07..2026-08-01   holdout         +0.05          NO  FAIL
+
+Gate 0 (walk-forward): FAIL (0/4 research windows passed (need > 50%); holdout failed)
+Do not proceed to paper trading.
+```
+
+### Secondary 2 — momentum, no filter, no parity (baseline)
+
+```
+Signal: momentum_12_1
+Period: 2000-01-01 .. 2026-08-01  (4 research windows + 1 holdout)
+
+Window                   Type      Sharpe edge Drawdown ok  Verdict
+-------------------------------------------------------------------
+2000-01-01..2005-04-24   research        +0.44         YES  PASS
+2005-04-25..2010-08-18   research        -0.08          NO  FAIL
+2010-08-19..2015-12-11   research        -0.22          NO  FAIL
+2015-12-12..2021-04-06   research        -0.28          NO  FAIL
+2021-04-07..2026-08-01   holdout         +0.04          NO  FAIL
+
+Gate 0 (walk-forward): FAIL (1/4 research windows passed (need > 50%); holdout failed)
+Do not proceed to paper trading.
+```
+
+### Secondary 3 — lowvol, --regime-filter --live-parity
+
+```
+Signal: low_vol
+Period: 2000-01-01 .. 2026-08-01  (4 research windows + 1 holdout)
+
+Window                   Type      Sharpe edge Drawdown ok  Verdict
+-------------------------------------------------------------------
+2000-01-01..2005-04-24   research        +0.68         YES  PASS
+2005-04-25..2010-08-18   research        +0.41         YES  PASS
+2010-08-19..2015-12-11   research        -0.03         YES  FAIL
+2015-12-12..2021-04-06   research        +0.08         YES  FAIL
+2021-04-07..2026-08-01   holdout         -0.71         YES  FAIL
+
+Gate 0 (walk-forward): FAIL (2/4 research windows passed (need > 50%); holdout failed)
+Do not proceed to paper trading.
+```
+
+## Verdict
+
+**Gate 0: FAIL.** The primary candidate passed 1 of 4 research windows and failed
+the holdout at -1.00. Per the decision rule fixed above, the primary alone
+decides, so nothing advances to paper trading.
+
+Secondary 3 (lowvol) came closest at 2 of 4 — and 2 of 4 is not a majority, the
+rule being *strictly more than half*. Its holdout was -0.71. It does not rescue
+the result and, being a secondary, could not have.
+
+### What the regime filter actually did
+
+Compare the primary against Secondary 1, which differs only in the filter:
+
+| Window | Primary (filter) | Secondary 1 (no filter) |
+|---|---|---|
+| 2000-01..2005-04 | **+0.65, dd ok** | -0.03, dd fail |
+| 2005-04..2010-08 | +0.24, dd ok | +0.05, dd fail |
+| 2010-08..2015-12 | -0.22, dd fail | -0.21, dd fail |
+| 2015-12..2021-04 | -0.14, dd ok | -0.28, dd fail |
+| holdout 2021-04..2026-08 | **-1.00**, dd fail | +0.05, dd fail |
+
+**The filter did the job it was built for.** Drawdown went from failing every
+window to passing three of five. The diagnosis — that the book takes the
+market's full drawdown because it is always ~100% net long — was correct, and
+the remedy addressed it.
+
+It still fails, because fixing drawdown cost more Sharpe than it bought. The
+holdout is the clearest case: +0.05 without the filter, **-1.00** with it. A
+200-day moving average exits after a decline is already underway and re-enters
+after a recovery is already underway, which is close to worst-case behaviour in
+the sharp V-shaped recoveries of 2020 and 2022. It bought protection in the
+slow 2000-2002 bear market and paid for it many times over since.
+
+### The pattern across every candidate
+
+The 2000-01..2005-04 window passes for three of four candidates. **Nothing
+passes any window after 2010.** Both anomalies under test — cross-sectional
+momentum and low volatility — were published decades ago and have been widely
+traded since. A result that lives entirely in the first third of the sample and
+disappears from the last two thirds is what decay looks like from the inside.
+
