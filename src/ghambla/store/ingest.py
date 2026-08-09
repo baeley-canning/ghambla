@@ -142,6 +142,13 @@ class YahooDataSource:
         self._pause = pause_seconds
 
     def fetch(self, symbol: str, range_: str = "10y") -> list[Bar]:
+        # Yahoo silently degrades `range=max` to quarterly bars — roughly 260
+        # rows spanning 60 years — while still echoing `interval=1d` in the
+        # request, so nothing in the response reveals that the resolution
+        # changed. Those quarterly aggregates then upsert over daily bars and
+        # corrupt the store. `30y` returns proper daily data from 1996.
+        if range_ == "max":
+            raise ValueError("range=max is not supported; use 30y instead")
         params = urllib.parse.urlencode({"range": range_, "interval": "1d", "events": "div,split"})
         req = urllib.request.Request(f"{CHART_URL}{symbol}?{params}",
                                      headers={"User-Agent": USER_AGENT})

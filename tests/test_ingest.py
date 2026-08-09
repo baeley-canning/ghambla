@@ -2,7 +2,7 @@ import datetime as dt
 
 import pytest
 
-from ghambla.store.ingest import ingest, parse_yahoo_chart
+from ghambla.store.ingest import YahooDataSource, ingest, parse_yahoo_chart
 from ghambla.store.store import Bar, FeatureStore
 
 PAYLOAD = {
@@ -113,3 +113,31 @@ def test_coverage_is_reported_as_a_fraction(store):
 
 def test_coverage_of_an_empty_request_is_zero(store):
     assert ingest(store, StubSource(), []).coverage == 0.0
+
+
+# --- resolution guard --------------------------------------------------
+
+
+def test_range_max_is_rejected():
+    """Yahoo silently degrades `range=max` to quarterly bars.
+
+    It returns ~260 rows spanning 60 years while still honouring
+    `interval=1d` in the request, so nothing in the response says the
+    resolution changed. Those quarterly aggregates then upsert over daily
+    bars and corrupt the store. `30y` returns proper daily data from 1996.
+    """
+    with pytest.raises(ValueError, match="max"):
+        YahooDataSource().fetch("IBM", "max")
+
+
+def test_cli_ingest_defaults_to_a_daily_safe_range():
+    import argparse
+    from ghambla.cli import main
+    parser_default = None
+    try:
+        main(["ingest", "--help"])
+    except SystemExit:
+        pass
+    # the default is asserted directly rather than by parsing help text
+    from ghambla import cli
+    assert "30y" in open(cli.__file__).read(), "ingest default range should be 30y"

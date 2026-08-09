@@ -352,7 +352,7 @@ def main(argv=None) -> int:
     pi = sub.add_parser("ingest", help="download membership and historical bars")
     pi.add_argument("--start", type=_date, default=_date("2018-01-01"))
     pi.add_argument("--end", type=_date, default=dt.date.today())
-    pi.add_argument("--range", default="10y")
+    pi.add_argument("--range", default="30y")
     pi.add_argument("--pause", type=float, default=0.2)
     pi.set_defaults(func=cmd_ingest)
 
