@@ -20,6 +20,7 @@ from .edgar import EdgarClient, fetch_fundamentals
 from .signals.fundamental import FundamentalSignal
 from .signals.lowvol import LowVolSignal
 from .signals.momentum import MomentumSignal
+from .signals.reversal import ReversalSignal
 from .signals.news import CachedClassifier, NewsSignal, StubClassifier
 from .sp500 import (
     ever_members_between,
@@ -189,7 +190,7 @@ def cmd_ingest_fundamentals(args) -> int:
     return 0
 
 
-SIGNAL_NAMES = ["momentum", "fundamental", "news", "lowvol"]
+SIGNAL_NAMES = ["momentum", "fundamental", "news", "lowvol", "reversal"]
 
 
 def _signals(names):
@@ -201,6 +202,8 @@ def _signal(name):
         return NewsSignal(CachedClassifier(StubClassifier(), "data/news_cache.json"))
     if name == "lowvol":
         return LowVolSignal()
+    if name == "reversal":
+        return ReversalSignal()
     return {"momentum": MomentumSignal, "fundamental": FundamentalSignal}[name]()
 
 
@@ -220,6 +223,7 @@ def cmd_backtest(args) -> int:
         result = run_backtest(store, signals, args.start, args.end,
                               initial_cash=args.cash, top_n=args.top_n,
                               rebalance_every=args.rebalance_every,
+                              spread_bps=args.spread_bps,
                               weighting=args.weighting,
                               regime_filter=args.regime_filter,
                               risk_gate=RiskGate() if (args.risk_gate or args.live_parity) else None,
@@ -318,7 +322,8 @@ def cmd_evaluate(args) -> int:
                                   holdout_frac=args.holdout,
                                   initial_cash=args.cash, top_n=args.top_n,
                                   rebalance_every=args.rebalance_every,
-                                  weighting=args.weighting,
+                                  spread_bps=args.spread_bps,
+                              weighting=args.weighting,
                               regime_filter=args.regime_filter,
                               risk_gate=RiskGate() if (args.risk_gate or args.live_parity) else None,
                               cash_buffer=CASH_BUFFER if args.live_parity else 0.0)
@@ -384,6 +389,9 @@ def main(argv=None) -> int:
     pb.add_argument("--cash", type=float, default=10_000.0)
     pb.add_argument("--top-n", type=int, default=10)
     pb.add_argument("--rebalance-every", type=int, default=21)
+    pb.add_argument("--spread-bps", type=float, default=5.0,
+                    help="modelled half-spread cost; raise it to test whether an "
+                         "edge survives realistic execution")
     pb.add_argument("--weighting", choices=WEIGHTINGS, default="equal")
     pb.add_argument("--regime-filter", action="store_true",
                     help="hold cash while the benchmark is below its 200d average")
@@ -405,6 +413,9 @@ def main(argv=None) -> int:
     pe.add_argument("--cash", type=float, default=10_000.0)
     pe.add_argument("--top-n", type=int, default=10)
     pe.add_argument("--rebalance-every", type=int, default=21)
+    pe.add_argument("--spread-bps", type=float, default=5.0,
+                    help="modelled half-spread cost; raise it to test whether an "
+                         "edge survives realistic execution")
     pe.add_argument("--weighting", choices=WEIGHTINGS, default="equal")
     pe.add_argument("--regime-filter", action="store_true",
                     help="hold cash while the benchmark is below its 200d average")
