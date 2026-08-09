@@ -311,3 +311,40 @@ def test_weigh_selects_before_pricing_volatility(store):
     finally:
         bt.realised_vols = real
     assert len(calls["symbols"]) == 2
+
+
+# --- market-regime filter ----------------------------------------------
+
+
+def test_regime_filter_is_off_by_default(store):
+    a = run_backtest(store, AlwaysBuy(), d("2026-01-01"), d("2026-02-28"),
+                     initial_cash=10_000.0)
+    b = run_backtest(store, AlwaysBuy(), d("2026-01-01"), d("2026-02-28"),
+                     initial_cash=10_000.0, regime_filter=False)
+    assert a.equity == b.equity and len(a.trades) == len(b.trades)
+
+
+def test_regime_filter_holds_cash_when_it_cannot_evaluate(store):
+    """Fails closed: no benchmark history means no exposure.
+
+    The fixture has no SPY at all, so the filter returns None every day. An
+    unknown regime must not be read as a friendly one.
+    """
+    r = run_backtest(store, AlwaysBuy(), d("2026-01-01"), d("2026-02-28"),
+                     initial_cash=10_000.0, regime_filter=True, regime_lookback=5)
+    assert r.trades == []
+
+
+def test_regime_filter_trades_when_the_benchmark_is_rising(store):
+    from ghambla.store.store import Bar
+    from ghambla.universe import BENCHMARK
+    day = d("2025-11-01")
+    bars = []
+    for i in range(120):
+        px = 100.0 * 1.002 ** i
+        bars.append(Bar(BENCHMARK, day, px, px, px, px, px, 1000))
+        day += dt.timedelta(days=1)
+    store.upsert_bars(bars)
+    r = run_backtest(store, AlwaysBuy(), d("2026-01-01"), d("2026-02-28"),
+                     initial_cash=10_000.0, regime_filter=True, regime_lookback=20)
+    assert r.trades

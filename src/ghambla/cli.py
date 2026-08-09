@@ -220,7 +220,8 @@ def cmd_backtest(args) -> int:
         result = run_backtest(store, signals, args.start, args.end,
                               initial_cash=args.cash, top_n=args.top_n,
                               rebalance_every=args.rebalance_every,
-                              weighting=args.weighting)
+                              weighting=args.weighting,
+                              regime_filter=args.regime_filter)
         bench = buy_and_hold(store, BENCHMARK, args.start, args.end, initial_cash=args.cash)
 
         strat_m = compute_metrics(result.dates, result.equity, len(result.trades))
@@ -315,7 +316,8 @@ def cmd_evaluate(args) -> int:
                                   holdout_frac=args.holdout,
                                   initial_cash=args.cash, top_n=args.top_n,
                                   rebalance_every=args.rebalance_every,
-                                  weighting=args.weighting)
+                                  weighting=args.weighting,
+                              regime_filter=args.regime_filter)
         print(format_walk_forward(result))
         return 0
     finally:
@@ -378,6 +380,8 @@ def main(argv=None) -> int:
     pb.add_argument("--top-n", type=int, default=10)
     pb.add_argument("--rebalance-every", type=int, default=21)
     pb.add_argument("--weighting", choices=WEIGHTINGS, default="equal")
+    pb.add_argument("--regime-filter", action="store_true",
+                    help="hold cash while the benchmark is below its 200d average")
     pb.set_defaults(func=cmd_backtest)
 
     pe = sub.add_parser("evaluate", help="walk-forward Gate 0 evaluation")
@@ -393,6 +397,8 @@ def main(argv=None) -> int:
     pe.add_argument("--top-n", type=int, default=10)
     pe.add_argument("--rebalance-every", type=int, default=21)
     pe.add_argument("--weighting", choices=WEIGHTINGS, default="equal")
+    pe.add_argument("--regime-filter", action="store_true",
+                    help="hold cash while the benchmark is below its 200d average")
     pe.set_defaults(func=cmd_evaluate)
 
     pc = sub.add_parser("cycle", help="run one decision cycle against a broker")

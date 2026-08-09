@@ -40,6 +40,7 @@ class RiskState:
     reconciled: bool = True
     halted: bool = False
     halt_reason: str = ""
+    risk_on: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,17 @@ class RiskGate:
                          f"-{limits.max_drawdown:.0%}"], True)
 
         # --- adjustments that only ever reduce ---
+        # A regime veto is a de-risk, not a halt. trading_blocked returns empty
+        # targets meaning "hold what you have", not "liquidate", because
+        # liquidating on bad data is itself a trade made on bad data. A regime
+        # veto is the opposite case — the data is fine and the conclusion is to
+        # be flat — so it empties the targets and lets the sells through.
+        # Blocking here would freeze the book fully invested in exactly the
+        # downtrend it is meant to step out of.
+        if state.risk_on is False:
+            return RiskDecision({}, ["market regime risk-off: exposure reduced to cash"],
+                                False)
+
         safe = {s: w for s, w in targets.items() if w > 0}
 
         if len(safe) > limits.max_positions:

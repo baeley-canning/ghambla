@@ -124,3 +124,48 @@ def test_empty_targets_are_allowed_and_stay_empty():
     out = RiskGate().evaluate({}, state())
     assert out.allowed
     assert out.targets == {}
+
+
+# --- market-regime exposure reduction ----------------------------------
+
+
+def _state(**kw):
+    base = dict(equity=10_000.0, peak_equity=10_000.0, previous_equity=10_000.0,
+                data_as_of=dt.date(2026, 8, 6), today=dt.date(2026, 8, 6))
+    base.update(kw)
+    return RiskState(**base)
+
+
+def test_risk_off_empties_targets_but_still_allows_trading():
+    """De-risking must EXIT, and the gate's block path means 'hold', not 'sell'.
+
+    `trading_blocked` deliberately holds existing positions, because
+    liquidating on bad data is itself a trade made on bad data. A regime veto
+    is the opposite case: the data is fine and the conclusion is to be flat, so
+    it empties the targets and lets the sells through.
+    """
+    decision = RiskGate().evaluate({"AAA": 0.5, "BBB": 0.5}, _state(risk_on=False))
+    assert decision.targets == {}
+    assert decision.allowed is True
+    assert any("regime" in v.lower() for v in decision.vetoes)
+
+
+def test_risk_on_leaves_targets_alone():
+    gate = RiskGate(RiskLimits(max_position_weight=1.0))
+    decision = gate.evaluate({"AAA": 0.5}, _state(risk_on=True))
+    assert decision.targets == {"AAA": 0.5}
+
+
+def test_regime_unset_is_not_a_veto():
+    """Default None means the filter is not in use; recorded results must stand."""
+    gate = RiskGate(RiskLimits(max_position_weight=1.0))
+    decision = gate.evaluate({"AAA": 0.5}, _state())
+    assert decision.targets == {"AAA": 0.5}
+    assert not any("regime" in v.lower() for v in decision.vetoes)
+
+
+def test_a_real_halt_still_beats_a_risk_on_regime():
+    """Ordering matters: a halt must not be overridden by a friendly market."""
+    decision = RiskGate().evaluate({"AAA": 0.5}, _state(risk_on=True, halted=True))
+    assert decision.allowed is False
+    assert decision.targets == {}

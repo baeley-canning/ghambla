@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from .allocator import RankAllocator, combine_scores
 from .costs import ibkr_tiered_commission
 from .portfolio import equal_weight_top_n, inverse_vol_top_n
+from .regime import trend_filter
 from .store.store import FeatureStore
 from .vol import realised_vols
 
@@ -91,7 +92,8 @@ def run_backtest(store: FeatureStore, signals, start: dt.date, end: dt.date,
                  initial_cash: float = 10_000.0, top_n: int = 10,
                  rebalance_every: int = 21, spread_bps: float = 5.0,
                  stale_days: int = 5, allocator: RankAllocator | None = None,
-                 weighting: str = "equal", vol_lookback: int = 252
+                 weighting: str = "equal", vol_lookback: int = 252,
+                 regime_filter: bool = False, regime_lookback: int = 200
                  ) -> BacktestResult:
     """`signals` is one signal, or a `name -> signal` mapping combined by rank."""
     signal_map = as_signal_map(signals)
@@ -179,8 +181,28 @@ def run_backtest(store: FeatureStore, signals, start: dt.date, end: dt.date,
 
         # 3. Decide, using only data knowable as of today's close.
         if i % rebalance_every == 0 and i < len(dates) - 1 and universe:
-            scores = score_universe(store, today, universe, signal_map, allocator)
-            pending = [(t.symbol, t.weight) for t in weigh(
-                scores, top_n, weighting, store, today, vol_lookback)]
+            if regime_filter:
+                # `is not True`, not `is False`: trend_filter returns None when
+                # it cannot be evaluated, and an unknown regime must fail
+                # closed — treating "cannot tell" as "risk-on" would take full
+                # exposure precisely when the data is missing.
+                risk_on = trend_filter(store, today, lookback=regime_lookback)
+                if risk_on is not True:
+                    # `pending = []` means EXIT, not hold. Empty targets make
+                    # the next day's execution loop size every held name to
+                    # zero and sell it. That is the whole point: the book is
+                    # always ~100% net long and takes the market's full
+                    # drawdown, so the filter has to actually reduce exposure.
+                    # Do NOT skip the rebalance — skipping would leave
+                    # yesterday's targets pending and stay invested.
+                    pending = []
+                else:
+                    scores = score_universe(store, today, universe, signal_map, allocator)
+                    pending = [(t.symbol, t.weight) for t in weigh(
+                        scores, top_n, weighting, store, today, vol_lookback)]
+            else:
+                scores = score_universe(store, today, universe, signal_map, allocator)
+                pending = [(t.symbol, t.weight) for t in weigh(
+                    scores, top_n, weighting, store, today, vol_lookback)]
 
     return BacktestResult(dates=dates, equity=equity, trades=trades)
