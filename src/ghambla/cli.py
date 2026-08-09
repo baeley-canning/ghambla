@@ -111,7 +111,7 @@ def cmd_ingest_splits(args) -> int:
                 print(f"  {done}/{total} ... {symbol}", flush=True)
 
         n, failed = ingest_splits(store, YahooSplitSource(pause_seconds=args.pause),
-                                  symbols, on_progress=progress)
+                                  symbols, range_=args.range, on_progress=progress)
         print(f"\nStored {n} split events. {len(failed)} lookups failed.")
     finally:
         store.close()
@@ -361,6 +361,7 @@ def main(argv=None) -> int:
     ps = sub.add_parser("ingest-splits", help="download split history")
     ps.add_argument("--start", type=_date, default=_date("2018-01-01"))
     ps.add_argument("--end", type=_date, default=dt.date.today())
+    ps.add_argument("--range", default="30y")
     ps.add_argument("--pause", type=float, default=0.2)
     ps.set_defaults(func=cmd_ingest_splits)
 
