@@ -145,7 +145,8 @@ def run_walk_forward(store, signals, start: dt.date, end: dt.date,
                      initial_cash: float = 10_000.0, top_n: int = 10,
                      rebalance_every: int = 21, spread_bps: float = 5.0,
                      allocator=None, weighting: str = "equal",
-                     regime_filter: bool = False) -> WalkForwardResult:
+                     regime_filter: bool = False,
+                     risk_gate=None) -> WalkForwardResult:
     """Evaluate `signals` per window from `start` to `end`, plus a final holdout.
 
     `signals` is one signal, or a `name -> signal` mapping combined by rank —
@@ -169,12 +170,12 @@ def run_walk_forward(store, signals, start: dt.date, end: dt.date,
             windows.append(_evaluate_window(
                 "research", store, signals, w_start, w_end,
                 initial_cash, top_n, rebalance_every, spread_bps, allocator, weighting,
-                regime_filter))
+                regime_filter, risk_gate))
     if holdout_days > 0:
         windows.append(_evaluate_window(
             "holdout", store, signals, holdout_start, end,
             initial_cash, top_n, rebalance_every, spread_bps, allocator, weighting,
-                regime_filter))
+                regime_filter, risk_gate))
 
     return WalkForwardResult(signal_name=signals_name(signals), start=start, end=end,
                              windows=windows)
@@ -184,11 +185,12 @@ def _evaluate_window(kind, store, signals, w_start: dt.date, w_end: dt.date,
                      cash: float, top_n: int, rebalance: int,
                      spread_bps: float, allocator=None,
                      weighting: str = "equal",
-                     regime_filter: bool = False) -> WindowVerdict:
+                     regime_filter: bool = False,
+                     risk_gate=None) -> WindowVerdict:
     result = run_backtest(store, signals, w_start, w_end, initial_cash=cash,
                           top_n=top_n, rebalance_every=rebalance, spread_bps=spread_bps,
                           allocator=allocator, weighting=weighting,
-                          regime_filter=regime_filter)
+                          regime_filter=regime_filter, risk_gate=risk_gate)
     bench = buy_and_hold(store, BENCHMARK, w_start, w_end, initial_cash=cash)
 
     strategy = compute_metrics(result.dates, result.equity, len(result.trades))

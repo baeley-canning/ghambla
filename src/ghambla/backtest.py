@@ -16,6 +16,7 @@ from .allocator import RankAllocator, combine_scores
 from .costs import ibkr_tiered_commission
 from .portfolio import equal_weight_top_n, inverse_vol_top_n
 from .regime import trend_filter
+from .risk import RiskState
 from .store.store import FeatureStore
 from .vol import realised_vols
 
@@ -93,9 +94,18 @@ def run_backtest(store: FeatureStore, signals, start: dt.date, end: dt.date,
                  rebalance_every: int = 21, spread_bps: float = 5.0,
                  stale_days: int = 5, allocator: RankAllocator | None = None,
                  weighting: str = "equal", vol_lookback: int = 252,
-                 regime_filter: bool = False, regime_lookback: int = 200
+                 regime_filter: bool = False, regime_lookback: int = 200,
+                 risk_gate=None
                  ) -> BacktestResult:
-    """`signals` is one signal, or a `name -> signal` mapping combined by rank."""
+    """`signals` is one signal, or a `name -> signal` mapping combined by rank.
+
+    The live cycle runs every decision through `RiskGate`; the backtest never
+    has. Gate 0 therefore measures a strategy that cannot be run — it reports
+    a -36% drawdown that live trading would never reach, because the gate
+    halts at -25%, and it reports position weights the gate would cap. When
+    `risk_gate` is provided, every rebalance decision passes through it just
+    as live trading would, so the backtest measures what can actually be run.
+    """
     signal_map = as_signal_map(signals)
     allocator = allocator or RankAllocator()
 
@@ -114,6 +124,8 @@ def run_backtest(store: FeatureStore, signals, start: dt.date, end: dt.date,
     equity: list[float] = []
     pending: list[tuple[str, float]] | None = None  # targets decided yesterday
     half_spread = spread_bps / 20_000.0
+    peak_equity = initial_cash
+    previous_equity = initial_cash
 
     for i, today in enumerate(dates):
         universe = store.universe_as_of(today)
@@ -179,30 +191,50 @@ def run_backtest(store: FeatureStore, signals, start: dt.date, end: dt.date,
         equity.append(cash + sum(sh * latest[sym].close
                                  for sym, sh in positions.items() if sym in latest))
 
+        # Track running values for the risk gate. The drawdown limit is
+        # measured from the peak, so a gate given only today's equity could
+        # never fire; the daily-loss limit needs yesterday's equity.
+        peak_equity = max(peak_equity, equity[-1])
+        # Yesterday's, deliberately: assigning today's would make the daily
+        # change identically zero and silently kill `max_daily_loss`.
+        previous_equity = equity[-2] if len(equity) >= 2 else equity[-1]
+
         # 3. Decide, using only data knowable as of today's close.
         if i % rebalance_every == 0 and i < len(dates) - 1 and universe:
-            if regime_filter:
-                # `is not True`, not `is False`: trend_filter returns None when
-                # it cannot be evaluated, and an unknown regime must fail
-                # closed — treating "cannot tell" as "risk-on" would take full
-                # exposure precisely when the data is missing.
-                risk_on = trend_filter(store, today, lookback=regime_lookback)
-                if risk_on is not True:
-                    # `pending = []` means EXIT, not hold. Empty targets make
-                    # the next day's execution loop size every held name to
-                    # zero and sell it. That is the whole point: the book is
-                    # always ~100% net long and takes the market's full
-                    # drawdown, so the filter has to actually reduce exposure.
-                    # Do NOT skip the rebalance — skipping would leave
-                    # yesterday's targets pending and stay invested.
-                    pending = []
-                else:
-                    scores = score_universe(store, today, universe, signal_map, allocator)
-                    pending = [(t.symbol, t.weight) for t in weigh(
-                        scores, top_n, weighting, store, today, vol_lookback)]
+            # Regime first: if the market is risk-off there is nothing to
+            # score, and the book should be flat regardless of what the signal
+            # thinks. `is not True`, not `is False`: trend_filter returns None
+            # when it cannot be evaluated, and an unknown regime must fail
+            # closed — treating "cannot tell" as "risk-on" would take full
+            # exposure precisely when the data is missing.
+            risk_on = trend_filter(store, today, lookback=regime_lookback) \
+                if regime_filter else None
+
+            if regime_filter and risk_on is not True:
+                # `[]` means EXIT, not hold. Empty targets make the next day's
+                # execution loop size every held name to zero and sell it. That
+                # is the point: the book is always ~100% net long and takes the
+                # market's full drawdown, so the filter must actually reduce
+                # exposure. Do NOT skip the rebalance — skipping would leave
+                # yesterday's targets pending and stay invested.
+                pending = []
             else:
                 scores = score_universe(store, today, universe, signal_map, allocator)
-                pending = [(t.symbol, t.weight) for t in weigh(
-                    scores, top_n, weighting, store, today, vol_lookback)]
+                targets = weigh(scores, top_n, weighting, store, today, vol_lookback)
+                if risk_gate is None:
+                    pending = [(t.symbol, t.weight) for t in targets]
+                else:
+                    state = RiskState(
+                        equity=equity[-1], peak_equity=peak_equity,
+                        previous_equity=previous_equity,
+                        data_as_of=max((b.date for b in latest.values()), default=today),
+                        today=today, risk_on=risk_on)
+                    decision = risk_gate.evaluate(
+                        {t.symbol: t.weight for t in targets}, state)
+                    # None means "leave yesterday's decision alone and hold what
+                    # you have". An empty list would size every holding to zero
+                    # and liquidate — and liquidating because the gate is unhappy
+                    # about data quality is itself a trade made on bad data.
+                    pending = list(decision.targets.items()) if decision.allowed else None
 
     return BacktestResult(dates=dates, equity=equity, trades=trades)

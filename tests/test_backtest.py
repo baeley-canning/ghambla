@@ -348,3 +348,82 @@ def test_regime_filter_trades_when_the_benchmark_is_rising(store):
     r = run_backtest(store, AlwaysBuy(), d("2026-01-01"), d("2026-02-28"),
                      initial_cash=10_000.0, regime_filter=True, regime_lookback=20)
     assert r.trades
+
+
+# --- the risk gate, which the backtest never applied ------------------
+
+
+def test_risk_gate_is_off_by_default(store):
+    """Every recorded Gate 0 number was produced without it."""
+    a = run_backtest(store, AlwaysBuy(), d("2026-01-01"), d("2026-02-28"),
+                     initial_cash=10_000.0)
+    b = run_backtest(store, AlwaysBuy(), d("2026-01-01"), d("2026-02-28"),
+                     initial_cash=10_000.0, risk_gate=None)
+    assert a.equity == b.equity and len(a.trades) == len(b.trades)
+
+
+def test_position_cap_binds_in_the_backtest_as_it_does_live(store):
+    """A single name at 100% is capped to 20%, leaving the rest in cash.
+
+    Without the gate the backtest reports a fully invested book that the live
+    cycle would never hold.
+    """
+    from ghambla.risk import RiskGate, RiskLimits
+    gate = RiskGate(RiskLimits(max_position_weight=0.20, min_positions=1))
+    r = run_backtest(store, AlwaysBuy(), d("2026-01-01"), d("2026-02-28"),
+                     initial_cash=10_000.0, top_n=1, risk_gate=gate)
+    bought = sum(t.shares * t.price for t in r.trades if t.side == "BUY")
+    assert bought < 10_000.0 * 0.35, f"expected ~20% deployed, got {bought:,.0f}"
+
+
+def test_a_blocking_gate_holds_rather_than_liquidates(store):
+    """Blocked means hold. Liquidating on bad data is a trade made on bad data."""
+    from ghambla.risk import RiskDecision
+
+    class AlwaysBlock:
+        def evaluate(self, targets, state):
+            return RiskDecision({}, ["blocked"], True)
+
+    r = run_backtest(store, AlwaysBuy(), d("2026-01-01"), d("2026-02-28"),
+                     initial_cash=10_000.0, risk_gate=AlwaysBlock())
+    assert r.trades == []
+
+
+def test_gate_sees_peak_equity_so_a_drawdown_halt_can_fire(store):
+    """The gate needs run-to-date peak, not just today's equity."""
+    seen = []
+
+    class Spy:
+        def evaluate(self, targets, state):
+            seen.append((state.equity, state.peak_equity, state.previous_equity))
+            from ghambla.risk import RiskDecision
+            return RiskDecision(targets, [], False)
+
+    run_backtest(store, AlwaysBuy(), d("2026-01-01"), d("2026-02-28"),
+                 initial_cash=10_000.0, risk_gate=Spy())
+    assert seen, "gate was never consulted"
+    assert all(peak >= eq for eq, peak, _ in seen), "peak must never sit below equity"
+    assert any(peak > 0 for _, peak, _ in seen)
+
+
+def test_gate_sees_yesterdays_equity_not_todays(store):
+    """The daily-loss limit compares today against YESTERDAY.
+
+    Handing the gate today's equity as `previous_equity` makes the daily
+    change identically zero, so `max_daily_loss` can never fire and the
+    backtest silently drops a limit the live cycle enforces. Caught by the
+    cold review, not by the tests above.
+    """
+    from ghambla.risk import RiskDecision
+    seen = []
+
+    class Spy:
+        def evaluate(self, targets, state):
+            seen.append((state.equity, state.previous_equity))
+            return RiskDecision(targets, [], False)
+
+    run_backtest(store, AlwaysBuy(), d("2026-01-01"), d("2026-02-28"),
+                 initial_cash=10_000.0, risk_gate=Spy())
+    # The fixture's price rises every day, so once invested, equity must move.
+    assert any(eq != prev for eq, prev in seen), \
+        "previous_equity always equalled equity: the daily-loss limit is dead"

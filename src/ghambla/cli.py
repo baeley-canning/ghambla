@@ -221,7 +221,8 @@ def cmd_backtest(args) -> int:
                               initial_cash=args.cash, top_n=args.top_n,
                               rebalance_every=args.rebalance_every,
                               weighting=args.weighting,
-                              regime_filter=args.regime_filter)
+                              regime_filter=args.regime_filter,
+                              risk_gate=RiskGate() if args.risk_gate else None)
         bench = buy_and_hold(store, BENCHMARK, args.start, args.end, initial_cash=args.cash)
 
         strat_m = compute_metrics(result.dates, result.equity, len(result.trades))
@@ -317,7 +318,8 @@ def cmd_evaluate(args) -> int:
                                   initial_cash=args.cash, top_n=args.top_n,
                                   rebalance_every=args.rebalance_every,
                                   weighting=args.weighting,
-                              regime_filter=args.regime_filter)
+                              regime_filter=args.regime_filter,
+                              risk_gate=RiskGate() if args.risk_gate else None)
         print(format_walk_forward(result))
         return 0
     finally:
@@ -382,6 +384,8 @@ def main(argv=None) -> int:
     pb.add_argument("--weighting", choices=WEIGHTINGS, default="equal")
     pb.add_argument("--regime-filter", action="store_true",
                     help="hold cash while the benchmark is below its 200d average")
+    pb.add_argument("--risk-gate", action="store_true",
+                    help="apply the live risk gate, so Gate 0 measures what would run")
     pb.set_defaults(func=cmd_backtest)
 
     pe = sub.add_parser("evaluate", help="walk-forward Gate 0 evaluation")
@@ -399,6 +403,8 @@ def main(argv=None) -> int:
     pe.add_argument("--weighting", choices=WEIGHTINGS, default="equal")
     pe.add_argument("--regime-filter", action="store_true",
                     help="hold cash while the benchmark is below its 200d average")
+    pe.add_argument("--risk-gate", action="store_true",
+                    help="apply the live risk gate, so Gate 0 measures what would run")
     pe.set_defaults(func=cmd_evaluate)
 
     pc = sub.add_parser("cycle", help="run one decision cycle against a broker")
