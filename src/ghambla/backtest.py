@@ -12,11 +12,62 @@ door.
 """
 import datetime as dt
 from dataclasses import dataclass, field
+from .allocator import RankAllocator, combine_scores
 from .costs import ibkr_tiered_commission
-from .portfolio import equal_weight_top_n
+from .portfolio import equal_weight_top_n, inverse_vol_top_n
 from .store.store import FeatureStore
+from .vol import realised_vols
 
 MIN_TRADE_VALUE = 1.0  # below this, an order is dust and is skipped
+
+
+def as_signal_map(signals) -> dict:
+    """Accept one signal or a `name -> signal` mapping; always return a mapping."""
+    if hasattr(signals, "score"):
+        return {getattr(signals, "name", "signal"): signals}
+    if not signals:
+        raise ValueError("need at least one signal")
+    return dict(signals)
+
+
+def signals_name(signals) -> str:
+    """Reporting label: the sub-signals' own names, joined."""
+    return "+".join(s.name for s in as_signal_map(signals).values())
+
+
+def score_universe(store: FeatureStore, day: dt.date, universe, signal_map: dict,
+                   allocator: RankAllocator):
+    """Scores for one day.
+
+    A lone signal is scored raw. Rank-combining a single signal would centre it
+    on zero, which makes half the universe positive by construction and so
+    destroys the `value > 0` filter that lets momentum sit in cash through a
+    drawdown. Several signals have no comparable units, so they go through the
+    allocator, which ranks within each before averaging.
+    """
+    return combine_scores({name: sig.score(store, day, universe)
+                           for name, sig in signal_map.items()}, allocator)
+
+
+WEIGHTINGS = ("equal", "invvol")
+
+
+def weigh(scores, top_n: int, weighting: str, store, day, vol_lookback: int) -> list:
+    """Turn scores into weighted targets under the chosen scheme.
+
+    Selection is identical under both schemes, so narrowing first changes
+    nothing but cost. `realised_vols` costs one query per symbol, so pricing
+    the whole universe every rebalance would be hundreds of queries to size
+    ten positions.
+    """
+    if weighting == "equal":
+        return equal_weight_top_n(scores, top_n)
+    if weighting == "invvol":
+        chosen = equal_weight_top_n(scores, top_n)
+        vols = realised_vols(store, day, [t.symbol for t in chosen],
+                             lookback=vol_lookback)
+        return inverse_vol_top_n(scores, top_n, vols)
+    raise ValueError(f"unknown weighting scheme: {weighting}")
 
 
 @dataclass(frozen=True)
@@ -36,10 +87,21 @@ class BacktestResult:
     trades: list[Trade] = field(default_factory=list)
 
 
-def run_backtest(store: FeatureStore, signal, start: dt.date, end: dt.date,
+def run_backtest(store: FeatureStore, signals, start: dt.date, end: dt.date,
                  initial_cash: float = 10_000.0, top_n: int = 10,
                  rebalance_every: int = 21, spread_bps: float = 5.0,
-                 stale_days: int = 5) -> BacktestResult:
+                 stale_days: int = 5, allocator: RankAllocator | None = None,
+                 weighting: str = "equal", vol_lookback: int = 252
+                 ) -> BacktestResult:
+    """`signals` is one signal, or a `name -> signal` mapping combined by rank."""
+    signal_map = as_signal_map(signals)
+    allocator = allocator or RankAllocator()
+
+    # Validate eagerly so a bad weighting fails before the date loop, not on
+    # the first rebalance.
+    if weighting not in WEIGHTINGS:
+        raise ValueError(f"unknown weighting scheme: {weighting}")
+
     dates = store.trading_dates(start, end)
     if not dates:
         return BacktestResult()
@@ -117,9 +179,8 @@ def run_backtest(store: FeatureStore, signal, start: dt.date, end: dt.date,
 
         # 3. Decide, using only data knowable as of today's close.
         if i % rebalance_every == 0 and i < len(dates) - 1 and universe:
-            scores = signal.score(store, today, universe)
-            pending = [(t.symbol, t.weight) for t in equal_weight_top_n(scores, top_n)]
+            scores = score_universe(store, today, universe, signal_map, allocator)
+            pending = [(t.symbol, t.weight) for t in weigh(
+                scores, top_n, weighting, store, today, vol_lookback)]
 
     return BacktestResult(dates=dates, equity=equity, trades=trades)
-
-

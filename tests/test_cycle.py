@@ -171,3 +171,87 @@ def test_rationale_is_preserved_for_later_diagnosis(store, tmp_path):
     cycle.run(d("2026-08-06"))
     scores = journal.last()["signal_scores"]["m"]
     assert scores["AAA"]["rationale"] == "stub"
+
+
+# --- the backtest and the live cycle must agree ------------------------
+
+
+class AllNegative:
+    """Every name is a sell. Raw scores mean 'hold nothing'."""
+
+    def score(self, store, as_of, universe):
+        return {s: Score(value=-1.0, confidence=1.0, rationale="stub") for s in universe}
+
+
+def test_a_lone_signal_can_still_go_to_cash(store, tmp_path):
+    """Gate 0 must validate what the live cycle actually runs.
+
+    `run_backtest` scores a single signal raw, so an all-negative signal buys
+    nothing and sits in cash — that is how momentum survives a drawdown. The
+    cycle used to rank-centre even a lone signal, which makes half the universe
+    positive by construction and buys regardless. Same signal, same day, two
+    different portfolios, and only one of them was ever measured.
+    """
+    cycle, broker, _ = make(store, tmp_path, signals={"neg": AllNegative()})
+    r = cycle.run(d("2026-08-06"))
+    assert r.targets == {}
+    assert r.orders == []
+    assert broker.snapshot().positions == {}
+
+
+def test_lone_signal_matches_the_backtest_combination(store, tmp_path):
+    """Both paths must route through one combination rule, not two."""
+    from ghambla.allocator import RankAllocator
+    from ghambla.backtest import score_universe
+
+    sig = Likes(["AAA", "BBB"])
+    universe = store.universe_as_of(d("2026-08-06"))
+    expected = score_universe(store, d("2026-08-06"), universe,
+                              {"m": sig}, RankAllocator())
+    cycle, _, _ = make(store, tmp_path, signals={"m": sig})
+    r = cycle.run(d("2026-08-06"))
+    top = sorted(expected, key=lambda s: (-expected[s].value, s))[:2]
+    assert set(r.targets) == set(top)
+
+
+def test_two_signals_are_still_rank_combined(store, tmp_path):
+    """Ranking is what makes incomparable signals comparable; keep it for >1."""
+    cycle, _, journal = make(store, tmp_path,
+                             signals={"a": Likes(["AAA", "BBB"]),
+                                      "b": Likes(["BBB", "AAA"])})
+    cycle.run(d("2026-08-06"))
+    rationales = " ".join(t for t in journal.last()["targets"])
+    assert set(journal.last()["targets"]) == {"AAA", "BBB"}, rationales
+
+
+def test_when_one_of_two_signals_dies_the_survivor_is_not_centred(store, tmp_path):
+    """A broken signal must not silently flip the survivor into rank space."""
+    cycle, broker, _ = make(store, tmp_path,
+                            signals={"neg": AllNegative(), "boom": Broken()})
+    r = cycle.run(d("2026-08-06"))
+    assert r.targets == {}
+    assert broker.snapshot().positions == {}
+
+
+def test_cycle_supports_the_same_weighting_schemes_as_the_backtest(store, tmp_path):
+    """Whatever Gate 0 measured is what the cycle must run.
+
+    The backtest gained inverse-vol weighting; if the cycle could not also run
+    it, adopting it would recreate exactly the validate-one-thing-run-another
+    split that `combine_scores` was written to close.
+    """
+    broker = SimulatedBroker(cash=10_000.0, spread_bps=0.0)
+    broker.connect()
+    cycle = DailyCycle(store, {"m": Likes(["AAA", "BBB"])}, broker,
+                       Journal(tmp_path / "w.jsonl"), mode="paper",
+                       risk_gate=RiskGate(RiskLimits(max_position_weight=1.0)),
+                       top_n=2, weighting="invvol")
+    r = cycle.run(d("2026-08-06"))
+    assert set(r.targets) == {"AAA", "BBB"}
+    assert sum(r.targets.values()) == pytest.approx(1.0)
+
+
+def test_cycle_rejects_an_unknown_weighting(store, tmp_path):
+    with pytest.raises(ValueError, match="weighting"):
+        DailyCycle(store, {"m": Likes(["AAA"])}, SimulatedBroker(cash=1.0),
+                   Journal(tmp_path / "w2.jsonl"), mode="paper", weighting="magic")

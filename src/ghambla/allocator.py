@@ -71,3 +71,22 @@ class RankAllocator:
             out[sym] = Score(value=combined, confidence=1.0,
                              rationale=f"rank average {combined:+.2f} ({', '.join(parts)})")
         return out
+
+
+def combine_scores(by_signal: dict[str, dict[str, Score]],
+                   allocator: RankAllocator) -> dict[str, Score]:
+    """One signal is used as-is; several are combined by rank.
+
+    Rank-centring subtracts 0.5 from a percentile rank, so half the universe
+    becomes positive by construction. The long-only portfolio constructor
+    selects on `value > 0`. Centring a lone signal therefore makes it
+    impossible to hold nothing — an all-negative signal would still buy the
+    least-bad names, chosen by alphabetical tie-break. Ranking exists to make
+    several incomparable signals comparable; with one signal there is nothing
+    to compare, so it only destroys the signal's own sign.
+    """
+    if not by_signal:
+        return {}
+    if len(by_signal) == 1:
+        return next(iter(by_signal.values()))
+    return allocator.combine(by_signal)

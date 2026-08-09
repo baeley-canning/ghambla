@@ -9,7 +9,7 @@ import json
 import pathlib
 import sys
 
-from .backtest import run_backtest
+from .backtest import WEIGHTINGS, run_backtest, signals_name
 from .broker import SimulatedBroker
 from .cycle import DailyCycle
 from .journal import Journal
@@ -18,6 +18,7 @@ from .evaluate import buy_and_hold, compute_metrics, format_report
 from .walkforward import format_walk_forward, run_walk_forward
 from .edgar import EdgarClient, fetch_fundamentals
 from .signals.fundamental import FundamentalSignal
+from .signals.lowvol import LowVolSignal
 from .signals.momentum import MomentumSignal
 from .signals.news import CachedClassifier, NewsSignal, StubClassifier
 from .sp500 import (
@@ -188,6 +189,9 @@ def cmd_ingest_fundamentals(args) -> int:
     return 0
 
 
+SIGNAL_NAMES = ["momentum", "fundamental", "news", "lowvol"]
+
+
 def _signals(names):
     return {n: _signal(n) for n in names}
 
@@ -195,6 +199,8 @@ def _signals(names):
 def _signal(name):
     if name == "news":
         return NewsSignal(CachedClassifier(StubClassifier(), "data/news_cache.json"))
+    if name == "lowvol":
+        return LowVolSignal()
     return {"momentum": MomentumSignal, "fundamental": FundamentalSignal}[name]()
 
 
@@ -210,10 +216,11 @@ def cmd_backtest(args) -> int:
             print("No data in range. Run `ingest` first.", file=sys.stderr)
             return 1
 
-        signal = _signal(args.signal)
-        result = run_backtest(store, signal, args.start, args.end,
+        signals = _signals(args.signal)
+        result = run_backtest(store, signals, args.start, args.end,
                               initial_cash=args.cash, top_n=args.top_n,
-                              rebalance_every=args.rebalance_every)
+                              rebalance_every=args.rebalance_every,
+                              weighting=args.weighting)
         bench = buy_and_hold(store, BENCHMARK, args.start, args.end, initial_cash=args.cash)
 
         strat_m = compute_metrics(result.dates, result.equity, len(result.trades))
@@ -222,7 +229,7 @@ def cmd_backtest(args) -> int:
         first_universe = store.universe_as_of(dates[0])
         print(f"\n{args.start} to {args.end}  |  {len(dates)} trading days  "
               f"|  top {args.top_n}, rebalance every {args.rebalance_every}d")
-        print(f"Signal: {signal.name}")
+        print(f"Signal: {signals_name(signals)}")
         print(f"Universe on day one: {len(first_universe)} names (dated S&P 500 membership)\n")
         print(format_report(strat_m, bench_m, BENCHMARK))
 
@@ -297,17 +304,18 @@ def cmd_evaluate(args) -> int:
 
     store = FeatureStore(args.db)
     try:
-        signal = _signal(args.signal)
+        signals = _signals(args.signal)
         dates = store.trading_dates(args.start, args.end)
         if not dates:
             print("No data in range. Run `ingest` first.", file=sys.stderr)
             return 1
 
-        result = run_walk_forward(store, signal, args.start, args.end,
+        result = run_walk_forward(store, signals, args.start, args.end,
                                   n_windows=args.windows,
                                   holdout_frac=args.holdout,
                                   initial_cash=args.cash, top_n=args.top_n,
-                                  rebalance_every=args.rebalance_every)
+                                  rebalance_every=args.rebalance_every,
+                                  weighting=args.weighting)
         print(format_walk_forward(result))
         return 0
     finally:
@@ -362,16 +370,19 @@ def main(argv=None) -> int:
     pn.set_defaults(func=cmd_ingest_news)
 
     pb = sub.add_parser("backtest", help="run a backtest")
-    pb.add_argument("--signal", choices=["momentum", "fundamental", "news"], default="momentum")
+    pb.add_argument("--signal", nargs="+", choices=SIGNAL_NAMES, default=["momentum"],
+                    help="one signal, or several combined by rank average")
     pb.add_argument("--start", type=_date, default=_date("2018-01-01"))
     pb.add_argument("--end", type=_date, default=dt.date.today())
     pb.add_argument("--cash", type=float, default=10_000.0)
     pb.add_argument("--top-n", type=int, default=10)
     pb.add_argument("--rebalance-every", type=int, default=21)
+    pb.add_argument("--weighting", choices=WEIGHTINGS, default="equal")
     pb.set_defaults(func=cmd_backtest)
 
     pe = sub.add_parser("evaluate", help="walk-forward Gate 0 evaluation")
-    pe.add_argument("--signal", choices=["momentum", "fundamental", "news"], default="momentum")
+    pe.add_argument("--signal", nargs="+", choices=SIGNAL_NAMES, default=["momentum"],
+                    help="one signal, or several combined by rank average")
     pe.add_argument("--start", type=_date, default=_date("2018-01-01"))
     pe.add_argument("--end", type=_date, default=dt.date.today())
     pe.add_argument("--windows", type=int, default=4,
@@ -381,11 +392,12 @@ def main(argv=None) -> int:
     pe.add_argument("--cash", type=float, default=10_000.0)
     pe.add_argument("--top-n", type=int, default=10)
     pe.add_argument("--rebalance-every", type=int, default=21)
+    pe.add_argument("--weighting", choices=WEIGHTINGS, default="equal")
     pe.set_defaults(func=cmd_evaluate)
 
     pc = sub.add_parser("cycle", help="run one decision cycle against a broker")
     pc.add_argument("--broker", choices=["simulated", "ibkr"], default="simulated")
-    pc.add_argument("--signals", nargs="+", choices=["momentum", "fundamental", "news"],
+    pc.add_argument("--signals", nargs="+", choices=SIGNAL_NAMES,
                     default=["momentum", "fundamental"])
     pc.add_argument("--as-of", type=_date, default=None)
     pc.add_argument("--as-of-floor", type=_date, default=_date("2018-01-01"))

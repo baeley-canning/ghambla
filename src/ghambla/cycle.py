@@ -20,13 +20,14 @@ fact is recorded.
 import datetime as dt
 from dataclasses import dataclass, field
 
-from .allocator import RankAllocator
+from .allocator import RankAllocator, combine_scores
+from .backtest import WEIGHTINGS, weigh
 from .broker import Broker, Order, OrderError
 from .journal import DecisionRecord, Journal
-from .portfolio import equal_weight_top_n
 from .reconcile import reconcile
 from .risk import RiskDecision, RiskGate, RiskState
 from .store.store import FeatureStore
+from .vol import TRADING_DAYS_PER_YEAR
 
 MIN_TRADE_VALUE = 1.0
 
@@ -53,7 +54,12 @@ class DailyCycle:
                  journal: Journal, mode: str,
                  allocator: RankAllocator | None = None,
                  risk_gate: RiskGate | None = None,
-                 top_n: int = 10, cash_buffer: float = CASH_BUFFER) -> None:
+                 top_n: int = 10, cash_buffer: float = CASH_BUFFER,
+                 weighting: str = "equal") -> None:
+        # Validate eagerly so a bad weighting fails at construction, not
+        # mid-trading-day when the cycle is already running.
+        if weighting not in WEIGHTINGS:
+            raise ValueError(f"unknown weighting scheme: {weighting}")
         self.store = store
         self.signals = signals
         self.broker = broker
@@ -63,6 +69,7 @@ class DailyCycle:
         self.risk_gate = risk_gate or RiskGate()
         self.top_n = top_n
         self.cash_buffer = cash_buffer
+        self.weighting = weighting
 
     def run(self, as_of: dt.date, halt: bool = False) -> CycleResult:
         started = dt.datetime.now(dt.UTC)
@@ -95,8 +102,10 @@ class DailyCycle:
                 by_signal[name] = signal.score(self.store, as_of, universe)
             except Exception as exc:
                 notes.append(f"signal {name} failed: {type(exc).__name__}: {exc}")
-        combined = self.allocator.combine(by_signal)
-        wanted = {t.symbol: t.weight for t in equal_weight_top_n(combined, self.top_n)}
+        combined = combine_scores(by_signal, self.allocator)
+        wanted = {t.symbol: t.weight for t in weigh(
+            combined, self.top_n, self.weighting, self.store, as_of,
+            TRADING_DAYS_PER_YEAR)}
 
         # --- risk ---
         state = RiskState(equity=equity, peak_equity=peak_equity,

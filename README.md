@@ -5,11 +5,11 @@ Interactive Brokers.
 
 **Status: Phases 1–3 built. Gate 0 FAILED — no strategy is cleared to trade.**
 
-The machinery is complete and tested: point-in-time data, two signals, risk
+The machinery is complete and tested: point-in-time data, four signals, risk
 gate, journal, reconciliation, broker adapters, daily cycle. What it does not
-have is an edge. Both signals lose to SPY on risk-adjusted terms, so running
-this against money — paper or real — would be exercising the plumbing, not
-pursuing a strategy that works.
+have is an edge. Every signal tested — alone and in combination — loses to SPY
+on risk-adjusted terms, so running this against money — paper or real — would
+be exercising the plumbing, not pursuing a strategy that works.
 
 ## What this is
 
@@ -37,9 +37,10 @@ data → point-in-time store → signals → allocator → portfolio → RISK GA
 | `store/` | Point-in-time feature store. Every fact carries `knowable_at`; no read can return the future. |
 | `sp500.py` | Dated index membership, so the universe is who was actually in the index that day. |
 | `edgar.py` | SEC fundamentals keyed on filing date. |
-| `signals/` | `momentum` (12-1), `fundamental` (value + quality). Pure functions over the store. |
-| `allocator.py` | Averages percentile ranks, so no signal dominates by emitting bigger numbers. |
-| `portfolio.py` | Scores → equal-weight long-only targets. |
+| `signals/` | `momentum` (12-1), `fundamental` (value + quality), `news` (LLM classifier), `lowvol` (realised volatility). Pure functions over the store. |
+| `allocator.py` | Averages percentile ranks, so no signal dominates by emitting bigger numbers. A lone signal is passed through uncentred. |
+| `vol.py` | Realised volatility, shared by the low-vol signal and the allocator so they cannot drift. |
+| `portfolio.py` | Scores → long-only targets, equal or inverse-vol weighted. |
 | `risk.py` | The veto layer. Can only reduce or block. Fails closed. |
 | `broker.py` | One interface: simulated, or IBKR. Sizing and risk live above it. |
 | `reconcile.py` | Compares belief against the broker. Any break halts trading. |
@@ -52,9 +53,18 @@ data → point-in-time store → signals → allocator → portfolio → RISK GA
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest                                    # 91 tests
+.venv/bin/pytest                                    # 281 tests
 .venv/bin/python -m ghambla.cli ingest              # ~45 min, 719 symbols
 .venv/bin/python -m ghambla.cli backtest --start 2018-01-01 --end 2026-08-01
+.venv/bin/python -m ghambla.cli evaluate --signal lowvol     # walk-forward Gate 0
+```
+
+`--signal` takes one name or several. Several are combined by rank average —
+the same `RankAllocator` the live cycle uses — so a combination faces exactly
+the same gate as a lone signal, with no separate easier path:
+
+```bash
+.venv/bin/python -m ghambla.cli evaluate --signal momentum fundamental
 ```
 
 Ingest is deliberately paced so it does not hammer a free data endpoint. The
@@ -74,8 +84,9 @@ you log the gateway into is what decides whether the money is real.**
 
 ## Results so far
 
-Both signals tested, both fail Gate 0, on dated S&P 500 membership after IBKR
-Tiered commission and 5bp spread, 2018-01-01 to 2026-08-01:
+Momentum and value+quality as single-period backtests, both failing Gate 0, on
+dated S&P 500 membership after IBKR Tiered commission and 5bp spread,
+2018-01-01 to 2026-08-01:
 
 | | Momentum (12-1) | Value+Quality | SPY |
 |---|---|---|---|
@@ -86,6 +97,87 @@ Tiered commission and 5bp spread, 2018-01-01 to 2026-08-01:
 | Sharpe edge | **-0.12** | **-0.21** | — |
 
 Neither beats buying SPY and doing nothing. Both take more risk to get there.
+
+## Walk-forward Gate 0
+
+The single-period backtest above is the weaker test. `evaluate` re-runs each
+candidate across four research windows plus an untouched holdout tail, and a
+signal must clear the Sharpe edge in a *majority* of research windows and in
+the holdout. Same universe, costs, and period as above.
+
+| Signal | Weighting | Research windows passed | Holdout Sharpe edge | Verdict |
+|---|---|---|---|---|
+| `momentum` (12-1) | equal | 1 of 4 | +0.24, drawdown breach | **FAIL** |
+| `lowvol` (252d realised) | equal | 1 of 4 | -0.23 | **FAIL** |
+| `momentum + fundamental` | equal | 0 of 4 | +0.10, drawdown breach | **FAIL** |
+| `momentum` (12-1) | inverse-vol | 1 of 4 | +0.23, drawdown breach | **FAIL** |
+
+Nothing is cleared to trade. Two details worth keeping in view:
+
+Both single signals pass exactly one window out of four, and it is a
+*different* window each time — momentum's is 2021-06..2023-02, low-vol's is
+2018-01..2019-09. A single passing window is what curve-fitting looks like
+from the inside, which is precisely why the majority rule exists.
+
+Rank-averaging momentum with fundamental scored **worse than either alone**
+(0 of 4). Combining weak signals diluted them rather than diversifying them.
+
+### What inverse-volatility weighting was worth
+
+Phase 5 replaced equal weighting with sizing proportional to `1 / vol`, on the
+theory that equal weighting hands a violent name the same share as a calm one,
+and that this was driving the repeated drawdown breaches.
+
+| Window | Equal | Inverse-vol |
+|---|---|---|
+| 2018-01..2019-09 | -0.28, dd fail | -0.30, dd fail |
+| 2019-09..2021-06 | -0.49, dd fail | -0.48, dd fail |
+| 2021-06..2023-02 | **+0.44 pass** | **+0.46 pass** |
+| 2023-02..2024-11 | -0.86, dd fail | -0.69, dd fail |
+| holdout | +0.24, dd fail | +0.23, dd fail |
+
+**It bought almost nothing, and it did not fix the thing it targeted.** Every
+window that failed on drawdown still fails on drawdown. The single worst window
+improved (-0.86 to -0.69) and the rest moved by hundredths.
+
+Sizing by `1 / vol` equalises each position's *standalone* risk and does
+nothing about *correlation*, so the obvious next suspect was that the ten
+holdings simply fall together. That was a story, so it got measured rather
+than believed — [docs/analysis/correlation_probe.py](docs/analysis/correlation_probe.py),
+102 rebalances, against a control book of 10 names drawn at random from the
+same universe on the same day.
+
+| | Momentum top-10 | Random 10 (control) |
+|---|---|---|
+| Average pairwise correlation | **+0.394** | +0.282 |
+| Diversification ratio | **1.534** | 1.769 |
+
+The momentum book is more correlated than an arbitrary one — about 40% more,
+and it gives up roughly 13% of the diversification a random book gets. So the
+effect is real, and it is **far too small to explain the drawdowns.** A
+diversification ratio of 1.53 is not a single factor bet; a book that was one
+bet would sit near 1.00.
+
+The correlation story was therefore mostly wrong, and the real answer is duller.
+SPY's own maximum drawdown over this period is -34.10%; momentum's is -36.31%.
+The strategy is not drawing down because its picks are unusually correlated
+with each other — it is drawing down because it is a long-only equity book that
+is always approximately 100% net long, so it eats the market's drawdown in full
+whatever it holds. Clearing the drawdown half of Gate 0 needs lower net
+exposure, a de-risking rule, or shorts. None of those exist here, and none of
+them are position *sizing*.
+
+Note also that equal weighting remains the default. The recorded results above
+were produced under it, and a scheme that fails its own pre-registered test
+does not become the default because it was newer.
+
+### On adding more signals
+
+Four candidates have now been measured against the same 2018–2026 data. Every
+additional candidate raises the chance that a pass is multiple-comparisons
+noise rather than an edge. The honest reading is that this dataset has been
+queried enough that a future marginal pass should be treated with suspicion,
+not celebration. A genuinely new dataset is worth more than a fifth signal.
 
 ## Current result
 
@@ -171,9 +263,10 @@ their own plans as each gate is cleared.
    engine with the IBKR cost model, 12-1 momentum, evaluation harness.
 2. **Decision machinery** — portfolio constructor, risk gate, journal.
 3. **Paper trading** — IBKR paper adapter, reconciliation, daily scheduler.
-4. **Additional signals** — news/LLM, then fundamental/factor, each measured
-   standalone before joining the ensemble.
-5. **Allocator** — replace equal weighting.
+4. ~~**Additional signals**~~ — done. news/LLM, fundamental/factor, low-vol,
+   each measured standalone and in combination. All fail Gate 0.
+5. ~~**Allocator**~~ — done. Inverse-volatility weighting built and measured;
+   it fails Gate 0 and equal weighting remains the default.
 6. **Live plumbing test** — NZ$100.
 
 ## Warning

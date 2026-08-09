@@ -204,3 +204,110 @@ def test_position_is_sold_when_signal_stops_liking_it(store):
     sides = [t.side for t in r.trades]
     assert "BUY" in sides
     assert "SELL" in sides
+
+
+# --- one signal, or several combined ------------------------------------
+
+
+class RanksBackwards:
+    """Prefers whatever AlwaysBuy dislikes, on a wildly different numeric scale."""
+    name = "ranks_backwards"
+
+    def __init__(self, symbol="AAA"):
+        self.symbol = symbol
+
+    def score(self, store, as_of, universe):
+        return {s: Score(value=-500.0 if s == self.symbol else 500.0,
+                         confidence=1.0, rationale="stub") for s in universe}
+
+
+def test_signals_name_joins_sub_signal_names():
+    from ghambla.backtest import signals_name
+    assert signals_name(AlwaysBuy()) == "always_buy"
+    assert signals_name({"a": AlwaysBuy(), "b": NeverBuy()}) == "always_buy+never_buy"
+
+
+def test_a_single_signal_keeps_its_raw_scores(store):
+    """Regression guard on the whole recorded result set.
+
+    A lone signal must NOT be routed through the rank allocator. Rank-centring
+    makes half the universe positive by construction, so an all-negative signal
+    would start buying and every Gate 0 number on record would shift.
+    """
+    raw = run_backtest(store, NeverBuy(), d("2026-01-01"), d("2026-02-28"),
+                       initial_cash=10_000.0)
+    wrapped = run_backtest(store, {"never": NeverBuy()}, d("2026-01-01"),
+                           d("2026-02-28"), initial_cash=10_000.0)
+    assert raw.trades == [] and wrapped.trades == []
+    assert raw.equity == wrapped.equity
+
+
+def test_several_signals_are_combined_by_rank_not_by_raw_magnitude(store):
+    """The allocator must rank within each signal before averaging.
+
+    `RanksBackwards` emits values 500x larger than `AlwaysBuy`. If magnitudes
+    were averaged directly it would dominate outright; under rank averaging the
+    two cancel, which is the entire point of ranking.
+    """
+    from ghambla.allocator import RankAllocator
+    from ghambla.backtest import score_universe
+
+    signal_map = {"buy": AlwaysBuy(), "back": RanksBackwards()}
+    scores = score_universe(store, d("2026-01-15"), ["AAA"], signal_map, RankAllocator())
+    # Single-name universe: each signal ranks it at the midpoint, so the
+    # centred rank average is exactly zero regardless of raw magnitude.
+    assert scores["AAA"].value == pytest.approx(0.0)
+
+
+def test_empty_signal_mapping_is_rejected(store):
+    with pytest.raises(ValueError, match="at least one signal"):
+        run_backtest(store, {}, d("2026-01-01"), d("2026-02-28"))
+
+
+# --- weighting scheme (Phase 5) ----------------------------------------
+
+
+def test_weighting_defaults_to_equal_and_is_unchanged(store):
+    """Every recorded Gate 0 number was produced under equal weighting."""
+    a = run_backtest(store, AlwaysBuy(), d("2026-01-01"), d("2026-02-28"),
+                     initial_cash=10_000.0)
+    b = run_backtest(store, AlwaysBuy(), d("2026-01-01"), d("2026-02-28"),
+                     initial_cash=10_000.0, weighting="equal")
+    assert a.equity == b.equity and len(a.trades) == len(b.trades)
+
+
+def test_invvol_weighting_runs_and_still_trades(store):
+    r = run_backtest(store, AlwaysBuy(), d("2026-01-01"), d("2026-02-28"),
+                     initial_cash=10_000.0, weighting="invvol")
+    assert r.trades
+
+
+def test_unknown_weighting_is_rejected(store):
+    with pytest.raises(ValueError, match="weighting"):
+        run_backtest(store, AlwaysBuy(), d("2026-01-01"), d("2026-02-28"),
+                     weighting="magic")
+
+
+def test_weigh_selects_before_pricing_volatility(store):
+    """Vol is computed only for the names actually chosen.
+
+    `realised_vols` costs one query per symbol. Pricing the whole universe each
+    rebalance would be hundreds of queries to size ten positions.
+    """
+    from ghambla.backtest import weigh
+    calls = {}
+    import ghambla.backtest as bt
+    real = bt.realised_vols
+
+    def spy(store_, day, symbols, lookback=252):
+        calls["symbols"] = list(symbols)
+        return real(store_, day, symbols, lookback=lookback)
+
+    bt.realised_vols = spy
+    try:
+        scores = {s: Score(value=1.0, confidence=1.0, rationale="x")
+                  for s in ("AAA", "BBB", "CCC", "DDD")}
+        weigh(scores, 2, "invvol", store, d("2026-01-15"), 252)
+    finally:
+        bt.realised_vols = real
+    assert len(calls["symbols"]) == 2

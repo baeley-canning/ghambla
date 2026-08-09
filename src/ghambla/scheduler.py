@@ -92,12 +92,12 @@ def main(argv=None) -> int:
     import pathlib
 
     from .broker import SimulatedBroker
-    from .cli import DEFAULT_DB, JOURNAL_PATH, SIM_STATE_PATH, _signals
+    from .cli import DEFAULT_DB, JOURNAL_PATH, SIGNAL_NAMES, SIM_STATE_PATH, _signals
 
     p = argparse.ArgumentParser(prog="ghambla-scheduler")
     p.add_argument("--db", default=DEFAULT_DB)
     p.add_argument("--broker", choices=["simulated", "ibkr"], default="simulated")
-    p.add_argument("--signals", nargs="+", choices=["momentum", "fundamental", "news"],
+    p.add_argument("--signals", nargs="+", choices=SIGNAL_NAMES,
                    default=["momentum", "fundamental"])
     p.add_argument("--as-of", type=lambda s: dt.date.fromisoformat(s), default=None)
     p.add_argument("--cash", type=float, default=10_000.0)

@@ -22,7 +22,7 @@ survive to be considered for paper trading.
 import datetime as dt
 from dataclasses import dataclass, field
 
-from .backtest import run_backtest
+from .backtest import run_backtest, signals_name
 from .evaluate import GATE_0_SHARPE_EDGE, Metrics, buy_and_hold, compute_metrics
 from .universe import BENCHMARK
 
@@ -139,12 +139,17 @@ def calendar_windows(start: dt.date, end: dt.date, n: int) -> list[tuple[dt.date
     return out
 
 
-def run_walk_forward(store, signal, start: dt.date, end: dt.date,
+def run_walk_forward(store, signals, start: dt.date, end: dt.date,
                      n_windows: int = 4,
                      holdout_frac: float = HOLDOUT_FRAC_DEFAULT,
                      initial_cash: float = 10_000.0, top_n: int = 10,
-                     rebalance_every: int = 21, spread_bps: float = 5.0) -> WalkForwardResult:
-    """Evaluate `signal` per window from `start` to `end`, plus a final holdout.
+                     rebalance_every: int = 21, spread_bps: float = 5.0,
+                     allocator=None, weighting: str = "equal") -> WalkForwardResult:
+    """Evaluate `signals` per window from `start` to `end`, plus a final holdout.
+
+    `signals` is one signal, or a `name -> signal` mapping combined by rank —
+    a combination faces exactly the same pre-registered gate as a lone signal,
+    with no separate easier path.
 
     Research windows live strictly before the holdout, so a parameter chosen
     by looking at a research window could never have seen the holdout's data —
@@ -161,22 +166,24 @@ def run_walk_forward(store, signal, start: dt.date, end: dt.date,
     if research_end >= start:
         for w_start, w_end in calendar_windows(start, research_end, n_windows):
             windows.append(_evaluate_window(
-                "research", store, signal, w_start, w_end,
-                initial_cash, top_n, rebalance_every, spread_bps))
+                "research", store, signals, w_start, w_end,
+                initial_cash, top_n, rebalance_every, spread_bps, allocator, weighting))
     if holdout_days > 0:
         windows.append(_evaluate_window(
-            "holdout", store, signal, holdout_start, end,
-            initial_cash, top_n, rebalance_every, spread_bps))
+            "holdout", store, signals, holdout_start, end,
+            initial_cash, top_n, rebalance_every, spread_bps, allocator, weighting))
 
-    return WalkForwardResult(signal_name=signal.name, start=start, end=end,
+    return WalkForwardResult(signal_name=signals_name(signals), start=start, end=end,
                              windows=windows)
 
 
-def _evaluate_window(kind, store, signal, w_start: dt.date, w_end: dt.date,
+def _evaluate_window(kind, store, signals, w_start: dt.date, w_end: dt.date,
                      cash: float, top_n: int, rebalance: int,
-                     spread_bps: float) -> WindowVerdict:
-    result = run_backtest(store, signal, w_start, w_end, initial_cash=cash,
-                          top_n=top_n, rebalance_every=rebalance, spread_bps=spread_bps)
+                     spread_bps: float, allocator=None,
+                     weighting: str = "equal") -> WindowVerdict:
+    result = run_backtest(store, signals, w_start, w_end, initial_cash=cash,
+                          top_n=top_n, rebalance_every=rebalance, spread_bps=spread_bps,
+                          allocator=allocator, weighting=weighting)
     bench = buy_and_hold(store, BENCHMARK, w_start, w_end, initial_cash=cash)
 
     strategy = compute_metrics(result.dates, result.equity, len(result.trades))
