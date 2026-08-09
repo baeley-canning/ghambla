@@ -3,7 +3,8 @@
 An automated trading system for US equities and ETFs, executing through
 Interactive Brokers.
 
-**Status: Phases 1–3 built. Gate 0 FAILED — no strategy is cleared to trade.**
+**Status: Phases 1–5 built. Gate 0 FAILED on 26 years of data — no strategy is
+cleared to trade, and the search is stopped.**
 
 The machinery is complete and tested: point-in-time data, four signals, risk
 gate, journal, reconciliation, broker adapters, daily cycle. What it does not
@@ -111,6 +112,29 @@ the holdout. Same universe, costs, and period as above.
 | `lowvol` (252d realised) | equal | 1 of 4 | -0.23 | **FAIL** |
 | `momentum + fundamental` | equal | 0 of 4 | +0.10, drawdown breach | **FAIL** |
 | `momentum` (12-1) | inverse-vol | 1 of 4 | +0.23, drawdown breach | **FAIL** |
+
+Re-baselined on **2000–2026** after extending the data, against a
+[pre-registration](docs/analysis/gate0_matrix.md) committed before any result on
+that window existed:
+
+| Signal | Configuration | Research windows | Holdout | Verdict |
+|---|---|---|---|---|
+| `momentum` **(primary)** | regime filter + live parity | 1 of 4 | **-1.00** | **FAIL** |
+| `momentum` | live parity | 0 of 4 | +0.05 | **FAIL** |
+| `momentum` | baseline | 1 of 4 | +0.04 | **FAIL** |
+| `lowvol` | regime filter + live parity | 2 of 4 | -0.71 | **FAIL** |
+
+Six candidates have now failed a pre-registered gate. **The search is stopped**;
+see [docs/analysis/gate0_matrix.md](docs/analysis/gate0_matrix.md) for the full
+output and the reasoning.
+
+Two findings worth keeping. The regime filter **did** fix the drawdown breaches
+it was built for — three of five windows pass drawdown against zero of five
+without it — but the Sharpe it cost exceeded the protection it bought, most
+starkly in the holdout (+0.05 without, -1.00 with). And **nothing passes any
+window after 2010**: three of four candidates pass 2000–2005 and none passes
+anything since. Both anomalies were published decades ago. That shape is what
+decay looks like from the inside.
 
 Nothing is cleared to trade. Two details worth keeping in view:
 
@@ -280,7 +304,9 @@ their own plans as each gate is cleared.
    each measured standalone and in combination. All fail Gate 0.
 5. ~~**Allocator**~~ — done. Inverse-volatility weighting built and measured;
    it fails Gate 0 and equal weighting remains the default.
-6. **Live plumbing test** — NZ$100.
+6. **Live plumbing test** — NZ$100. Available only as a deliberate engineering
+   exercise. Gate 0 has failed for every candidate, so no strategy is validated
+   and none may be represented as such.
 
 ## Warning
 
