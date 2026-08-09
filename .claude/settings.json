@@ -1,0 +1,19 @@
+{
+  "_comment": "Project-scoped only. These plugins and skills stay enabled globally for website/ads/SEO work; they are switched off here because ghambla is a stdlib-only Python trading system with no frontend. Every enabled skill's description is loaded into context at session start, so trimming them is a per-session token saving.",
+  "enabledPlugins": {
+    "typescript-lsp@claude-plugins-official": false,
+    "ui-theme-designer@claude-plugins-official": false,
+    "modern-web-guidance@claude-plugins-official": false,
+    "playwright@claude-plugins-official": false
+  },
+  "skillOverrides": {
+    "taste-design": "off",
+    "impeccable": "off",
+    "emil-design-eng": "off",
+    "use-railway": "user-invocable-only",
+    "dataviz": "user-invocable-only",
+    "artifact-design": "user-invocable-only",
+    "artifact-diagramming": "user-invocable-only",
+    "artifact-capabilities": "user-invocable-only"
+  }
+}
