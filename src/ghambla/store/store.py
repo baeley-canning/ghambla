@@ -130,17 +130,28 @@ class FeatureStore:
         """The most recent `lookback` bars per symbol that were knowable at `as_of`.
 
         Returned oldest-first so callers can index chronologically.
+
+        The per-symbol loop this replaces cost one query each, which at 700
+        names across 26 years is roughly a million round trips, each sorting
+        thousands of rows. A single window-function statement does the same
+        work in one pass.
         """
-        out: dict[str, list[Bar]] = {}
-        for symbol in symbols:
-            cur = self._conn.execute(
-                "SELECT * FROM bars WHERE symbol = ? AND knowable_at <= ?"
-                " ORDER BY date DESC LIMIT ?",
-                (symbol, as_of.isoformat(), lookback),
-            )
-            found = [self._to_bar(r) for r in cur.fetchall()]
-            found.reverse()
-            out[symbol] = found
+        out: dict[str, list[Bar]] = {s: [] for s in symbols}
+        if not symbols:
+            return out
+        placeholders = ",".join("?" * len(symbols))
+        cur = self._conn.execute(
+            f"SELECT * FROM ("
+            f"  SELECT b.*, ROW_NUMBER() OVER ("
+            f"           PARTITION BY b.symbol ORDER BY b.date DESC) AS rn"
+            f"  FROM bars b"
+            f"  WHERE b.knowable_at <= ? AND b.symbol IN ({placeholders})"
+            f") WHERE rn <= ?"
+            f" ORDER BY symbol, date",
+            (as_of.isoformat(), *symbols, lookback),
+        )
+        for r in cur.fetchall():
+            out[r["symbol"]].append(self._to_bar(r))
         return out
 
     def latest_bars_as_of(self, as_of: dt.date, symbols: Sequence[str]) -> dict[str, Bar]:

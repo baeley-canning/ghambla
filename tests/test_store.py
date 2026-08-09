@@ -113,3 +113,57 @@ def test_trading_dates_are_the_dates_we_actually_have_bars_for(store):
                        bar("MSFT", "2026-01-05", 200.0),
                        bar("AAPL", "2026-01-06", 101.0)])
     assert store.trading_dates(d("2026-01-01"), d("2026-01-31")) == [d("2026-01-05"), d("2026-01-06")]
+
+
+# --- bars_as_of batching -----------------------------------------------
+
+
+def test_bars_as_of_matches_a_naive_per_symbol_query(tmp_path):
+    """Batching must not change a single returned row.
+
+    bars_as_of is the point-in-time chokepoint every signal reads through, so
+    a faster implementation has to be provably identical to the obvious one.
+    """
+    s = FeatureStore(tmp_path / "b.db")
+    try:
+        day = dt.date(2026, 1, 1)
+        bars = []
+        for i in range(40):
+            for sym, base in (("AAA", 100.0), ("BBB", 50.0), ("CCC", 25.0)):
+                px = base + i
+                bars.append(Bar(sym, day, px, px, px, px, px, 1000 + i))
+            day += dt.timedelta(days=1)
+        s.upsert_bars(bars)
+
+        def naive(as_of, symbols, lookback):
+            out = {}
+            for symbol in symbols:
+                cur = s._conn.execute(
+                    "SELECT * FROM bars WHERE symbol = ? AND knowable_at <= ?"
+                    " ORDER BY date DESC LIMIT ?",
+                    (symbol, as_of.isoformat(), lookback))
+                found = [FeatureStore._to_bar(r) for r in cur.fetchall()]
+                found.reverse()
+                out[symbol] = found
+            return out
+
+        syms = ["AAA", "BBB", "CCC", "MISSING"]
+        for as_of in (dt.date(2026, 1, 5), dt.date(2026, 1, 20), dt.date(2026, 3, 1)):
+            for lookback in (1, 7, 100):
+                assert s.bars_as_of(as_of, syms, lookback) == naive(as_of, syms, lookback), \
+                    f"diverged at as_of={as_of} lookback={lookback}"
+    finally:
+        s.close()
+
+
+def test_bars_as_of_includes_symbols_with_no_data_as_empty(tmp_path):
+    """Callers do `history.get(sym, [])`; a missing key and an empty list must
+    both work, but the existing contract returns the key."""
+    s = FeatureStore(tmp_path / "b2.db")
+    try:
+        s.upsert_bars([Bar("AAA", dt.date(2026, 1, 1), 1, 1, 1, 1, 1, 1)])
+        got = s.bars_as_of(dt.date(2026, 1, 5), ["AAA", "NOPE"], lookback=10)
+        assert got["NOPE"] == []
+        assert len(got["AAA"]) == 1
+    finally:
+        s.close()
