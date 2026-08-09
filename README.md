@@ -220,14 +220,27 @@ that knew in 2018 which companies would still be winning in 2026. Once the
 backtest can only pick from names actually in the index at the time, and must
 hold the ones that later collapsed, momentum has no risk-adjusted edge here.
 
-### Residual bias, still present
+### Residual bias, still present — and worse on the long window
 
-Coverage is 84.7%: 609 of 719 historical members could be priced. The missing
-110 are disproportionately the acquired and delisted — AABA, ABMD, BCR, HAR,
-LLTC, MJN, RAI, STJ — because data vendors stop serving history once a ticker
-dies. Those names were never buyable by the backtest, so some survivorship
-bias remains and the numbers above are still a little generous. Coverage is
-recomputed on every ingest and printed under every result.
+Extending to 2000 made this materially worse, and the number is recorded here
+before any performance result on the long window was read.
+
+| Window | Requested | Priced | Coverage |
+|---|---|---|---|
+| 2016–2026 | 719 | 609 | **84.7%** |
+| 2000–2026 | 1133 | 746 | **65.8%** |
+
+387 of 1133 historical members cannot be priced — 202 returned
+empty and 185 failed outright. Examples: AABA, AAMRQ, ABC, ABKFQ, ABMD, ABS, ACAS, ACKH.
+
+They are disproportionately the acquired and delisted, because vendors stop
+serving history once a ticker dies, and the longer the window the more dead
+tickers it contains. Those names were never buyable by the backtest, so
+survivorship bias remains and **every number on the 2000–2026 window is more
+generous than reality by more than the 2016–2026 numbers were.** A third of
+the universe being unpriceable is a real limitation, not a footnote.
+
+Coverage is recomputed on every ingest and printed under every result.
 
 ### What not to do next
 
