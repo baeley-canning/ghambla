@@ -24,11 +24,16 @@ CREATE TABLE IF NOT EXISTS bars (
 BARS_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_bars_knowable
     ON bars (symbol, knowable_at);
+"""
 
--- `latest_bars_as_of` runs once per simulated day and takes MAX(date) per
--- symbol. Without `date` in the index that is a scan of every bar the symbol
--- has ever had; with it, the maximum is read straight off the index. Worth
--- about 20% of total backtest runtime at 4.4M bars.
+# `latest_bars_as_of` runs once per simulated day and takes MAX(date) per
+# symbol. Without `date` in the index that is a scan of every bar the symbol
+# has ever had; with it the maximum is read straight off the index. Worth
+# about 20% of total backtest runtime at 4.4M bars.
+#
+# Each constant holds exactly ONE statement: they are applied with
+# `execute()`, which refuses more.
+BARS_MAXDATE_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_bars_symbol_knowable_date
     ON bars (symbol, knowable_at, date);
 """
@@ -92,5 +97,5 @@ CREATE INDEX IF NOT EXISTS idx_news_knowable
     ON news (symbol, knowable_at);
 """
 
-ALL = [BARS, BARS_INDEX, UNIVERSE, UNIVERSE_INDEX,
+ALL = [BARS, BARS_INDEX, BARS_MAXDATE_INDEX, UNIVERSE, UNIVERSE_INDEX,
        FUNDAMENTALS, FUNDAMENTALS_INDEX, SPLITS, NEWS, NEWS_INDEX]
