@@ -38,3 +38,4 @@ npm-debug.log*
 .idea/
 .DS_Store
 *.swp
+logs/
