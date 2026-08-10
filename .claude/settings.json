@@ -1,5 +1,5 @@
 {
-  "_comment": "Project-scoped only. These plugins and skills stay enabled globally for website/ads/SEO work; they are switched off here because ghambla is a stdlib-only Python trading system with no frontend. Every enabled skill's description is loaded into context at session start, so trimming them is a per-session token saving.",
+  "_comment": "Project-scoped only. Frontend/design plugins stay enabled globally for website/ads/SEO work. Disabled here while the project was backend-only; dataviz and the artifact skills were re-enabled when a dashboard was added.",
   "enabledPlugins": {
     "typescript-lsp@claude-plugins-official": false,
     "ui-theme-designer@claude-plugins-official": false,
@@ -11,9 +11,6 @@
     "impeccable": "off",
     "emil-design-eng": "off",
     "use-railway": "user-invocable-only",
-    "dataviz": "user-invocable-only",
-    "artifact-design": "user-invocable-only",
-    "artifact-diagramming": "user-invocable-only",
     "artifact-capabilities": "user-invocable-only"
   }
 }
