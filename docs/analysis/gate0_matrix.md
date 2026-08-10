@@ -198,3 +198,76 @@ momentum and low volatility — were published decades ago and have been widely
 traded since. A result that lives entirely in the first third of the sample and
 disappears from the last two thirds is what decay looks like from the inside.
 
+
+
+---
+
+## Addendum — candidate seven: short-term reversal
+
+Added after the four above, as a genuinely different anomaly family rather than
+another spin on momentum. Buy yesterday's biggest losers, daily rebalance,
+`--live-parity`.
+
+```
+Signal: reversal
+Period: 2000-01-01 .. 2026-08-01  (4 research windows + 1 holdout)
+
+Window                   Type      Sharpe edge Drawdown ok  Verdict
+-------------------------------------------------------------------
+2000-01-01..2005-04-24   research        +0.73         YES  PASS
+2005-04-25..2010-08-18   research        +0.29         YES  FAIL
+2010-08-19..2015-12-11   research        -0.11          NO  FAIL
+2015-12-12..2021-04-06   research        -0.49          NO  FAIL
+2021-04-07..2026-08-01   holdout         -0.86          NO  FAIL
+
+Gate 0 (walk-forward): FAIL (1/4 research windows passed (need > 50%); holdout failed)
+Do not proceed to paper trading.
+```
+
+**FAIL.** 1 of 4 research windows, holdout -0.86.
+
+### Cost sensitivity — the reason it was worth testing at all
+
+A single-year backtest (2010, daily rebalance, top 10) passed Gate 0 at +58.56%
+against SPY's +19.82%. That number is entirely an artefact of the modelled
+spread:
+
+| Spread | Return | Sharpe | Edge vs SPY (0.86) |
+|---|---|---|---|
+| 5bp | +58.56% | 1.40 | +0.54 |
+| 25bp | +28.71% | 0.85 | **-0.01** |
+| 50bp | -0.98% | 0.15 | -0.71 |
+| 100bp | -41.88% | -1.26 | -2.12 |
+
+At ~3,000 trades a year, one basis point of cost is worth roughly 1.5
+percentage points of annual return. Interpolating, Gate 0's +0.30 edge survives
+only below about **14bp all-in round trip** — for a basket of yesterday's
+biggest losers, bought at the next open, at 10% of equity per name. That is the
+textbook profile of an anomaly that is real gross and eaten entirely by
+execution.
+
+## Conclusion after seven candidates
+
+| Candidate | Best window | Anything after 2010? |
+|---|---|---|
+| momentum (12-1) | 2000-2005 | no |
+| momentum + fundamental | none | no |
+| lowvol | 2000-2005, 2005-2010 | no |
+| inverse-vol weighting | 2021-2023 only | no |
+| momentum + regime filter | 2000-2005 | no |
+| reversal | 2000-2005 | no |
+
+**Nothing passes any window after 2010.** Seven candidates spanning
+cross-sectional momentum, low volatility, value/quality, short-term reversal,
+two weighting schemes and a trend filter. Every one shows an edge in the first
+third of the sample and nothing in the last two thirds.
+
+These anomalies were published decades ago and are traded by everyone. The
+consistent finding is not that this implementation is bad — the harness detected
+a real effect in 2000-2010 in six of seven cases, which is evidence it works.
+The finding is that the effects are gone from US large caps at daily frequency.
+
+**The strategy search is closed.** Further candidates on this dataset are
+p-hacking. What would change the answer is a different market, a different
+frequency with the execution data to price it honestly, or a genuinely
+non-public signal — not an eighth variation.
