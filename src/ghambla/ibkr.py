@@ -30,6 +30,39 @@ LIVE_TWS_PORT = 7496
 DEAD_STATUSES = {"Cancelled", "ApiCancelled", "Inactive"}
 
 
+def default_host() -> str:
+    """Best guess at where IB Gateway is listening, from this process.
+
+    Under WSL2's default NAT networking, a process in WSL cannot reach a
+    service on the Windows host via 127.0.0.1 — they are separate network
+    namespaces. The Windows host is reachable at the default gateway of the
+    WSL virtual NIC, which we read from /proc/net/route. This is a fallback
+    for that NAT mode only: WSL's mirrored networking mode would make
+    127.0.0.1 work, so this detection is not a universal truth. Note that
+    IB Gateway must additionally be configured to accept API connections
+    from the WSL subnet, which is a setting in the Gateway UI, not something
+    code can do. Any failure here degrades to the ordinary default.
+    """
+    try:
+        with open("/proc/sys/kernel/osrelease") as f:
+            if "microsoft" not in f.read().lower():
+                return "127.0.0.1"
+        with open("/proc/net/route") as f:
+            for line in f:
+                fields = line.split()
+                if len(fields) >= 3 and fields[1] == "00000000":
+                    gw_hex = fields[2]
+                    if len(gw_hex) != 8:
+                        return "127.0.0.1"
+                    # Gateway is little-endian hex: last two chars are the
+                    # first octet of the IPv4 address.
+                    octets = [int(gw_hex[i:i+2], 16) for i in range(6, -1, -2)]
+                    return ".".join(str(o) for o in octets)
+    except (OSError, ValueError, IndexError):
+        pass
+    return "127.0.0.1"
+
+
 class IBKRBroker:
     """Thin translation layer over ib_async.
 
@@ -40,10 +73,10 @@ class IBKRBroker:
 
     name = "ibkr"
 
-    def __init__(self, host: str = "127.0.0.1", port: int | None = None,
+    def __init__(self, host: str | None = None, port: int | None = None,
                  client_id: int = 1, live: bool = False,
                  account: str = "", ib=None, fill_timeout: float = 60.0) -> None:
-        self.host = host
+        self.host = host if host is not None else default_host()
         self.live = live
         self.port = port if port is not None else (
             LIVE_GATEWAY_PORT if live else PAPER_GATEWAY_PORT)

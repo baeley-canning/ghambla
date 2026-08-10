@@ -94,10 +94,37 @@ def test_explicit_port_wins():
     assert IBKRBroker(port=7497).port == 7497
 
 
-def test_connect_passes_through():
+def test_connect_uses_the_detected_host_by_default():
+    """Under WSL2 NAT, 127.0.0.1 does not reach IB Gateway on the Windows host.
+
+    This test previously asserted 127.0.0.1, which encoded the bug: the adapter
+    would have timed out against a gateway that was running fine, and the error
+    would have read as "gateway down" rather than "wrong address".
+    """
+    from ghambla.ibkr import default_host
     ib = FakeIB()
     IBKRBroker(ib=ib, client_id=9).connect()
-    assert ib.connected_to == ("127.0.0.1", PAPER_GATEWAY_PORT, 9)
+    assert ib.connected_to == (default_host(), PAPER_GATEWAY_PORT, 9)
+
+
+def test_an_explicit_host_always_wins():
+    ib = FakeIB()
+    IBKRBroker(ib=ib, client_id=9, host="10.0.0.5").connect()
+    assert ib.connected_to == ("10.0.0.5", PAPER_GATEWAY_PORT, 9)
+
+
+def test_default_host_degrades_to_loopback_when_detection_fails(monkeypatch):
+    """A wrong guess must fall back, never raise — an unreadable /proc file
+    should not stop the adapter connecting at all."""
+    import builtins
+
+    import ghambla.ibkr as m
+
+    def boom(*a, **k):
+        raise OSError("unreadable")
+
+    monkeypatch.setattr(builtins, "open", boom)
+    assert m.default_host() == "127.0.0.1"
 
 
 # --- snapshot ---
