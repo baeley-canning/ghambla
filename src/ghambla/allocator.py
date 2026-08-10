@@ -31,7 +31,20 @@ def _ranks(scores: dict[str, Score]) -> dict[str, float]:
         return {next(iter(voted)): 0.5}
     ordered = sorted(voted.items(), key=lambda kv: (kv[1], kv[0]))
     n = len(ordered) - 1
-    return {sym: i / n for i, (sym, _) in enumerate(ordered)}
+    # Midranks: symbols sharing a value all get the average of the positions
+    # their group spans. Without this, ties are broken alphabetically by the
+    # sort key, which silently becomes a preference that drives trade selection.
+    ranks: dict[str, float] = {}
+    i = 0
+    while i < len(ordered):
+        j = i
+        while j + 1 < len(ordered) and ordered[j + 1][1] == ordered[i][1]:
+            j += 1
+        mid = (i + j) / 2 / n
+        for k in range(i, j + 1):
+            ranks[ordered[k][0]] = mid
+        i = j + 1
+    return ranks
 
 
 class RankAllocator:
