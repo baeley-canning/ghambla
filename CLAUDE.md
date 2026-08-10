@@ -32,6 +32,16 @@ Use `--review` for a cold second opinion. It is a filter, not a gate: it has
 passed files the tests then failed, and it once caught a dead `max_daily_loss`
 limit the tests missed. Treat it as neither authoritative nor useless.
 
+## Report outcomes, not process
+
+Cassius is the customer. Fix it, verify it, state the result in a line or two.
+No narration of bugs found and fixed along the way — that is the contractor's
+job to absorb. Decide rather than presenting options.
+
+The one exception is anything that changes what he is actually getting: money
+at risk, a number that would mislead, a promise that cannot be kept. Those get
+said once, briefly.
+
 ## Verify before claiming
 
 Run the command, read the output, then state the result. "Tests pass" without
