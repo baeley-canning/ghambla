@@ -154,7 +154,12 @@ def cmd_ingest_news(args) -> int:
                              knowable_at=dt.date.today()),
                 ]
 
-        n, failed = ingest_news(store, StubNewsSource(), symbols, on_progress=progress)
+        if args.stub:
+            source = StubNewsSource()
+        else:
+            from .news_live import YahooNewsSource
+            source = YahooNewsSource(max_age_hours=args.max_age_hours)
+        n, failed = ingest_news(store, source, symbols, on_progress=progress)
         print(f"\nStored {n} news items. {len(failed)} lookups failed.")
     finally:
         store.close()
@@ -199,7 +204,17 @@ def _signals(names):
 
 def _signal(name):
     if name == "news":
-        return NewsSignal(CachedClassifier(StubClassifier(), "data/news_cache.json"))
+        # A real LLM when a key is present, the keyword stub otherwise. The
+        # stub is not an edge and must never be mistaken for one, so which is
+        # in use is printed rather than inferred.
+        import pathlib as _pl
+        if _pl.Path("~/.config/deepseek/key").expanduser().exists():
+            from .news_live import DeepSeekClassifier
+            inner, which = DeepSeekClassifier(), "deepseek"
+        else:
+            inner, which = StubClassifier(), "STUB (no API key — not an edge)"
+        print(f"  news classifier: {which}", file=sys.stderr)
+        return NewsSignal(CachedClassifier(inner, "data/news_cache.json"))
     if name == "lowvol":
         return LowVolSignal()
     if name == "reversal":
@@ -379,6 +394,10 @@ def main(argv=None) -> int:
     pn = sub.add_parser("ingest-news", help="download news items for the universe")
     pn.add_argument("--start", type=_date, default=_date("2018-01-01"))
     pn.add_argument("--end", type=_date, default=dt.date.today())
+    pn.add_argument("--stub", action="store_true",
+                    help="use canned headlines instead of the live feed")
+    pn.add_argument("--max-age-hours", type=int, default=36,
+                    help="drop items older than this; stale commentary is not news")
     pn.set_defaults(func=cmd_ingest_news)
 
     pb = sub.add_parser("backtest", help="run a backtest")
