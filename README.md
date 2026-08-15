@@ -48,13 +48,28 @@ data → point-in-time store → signals → allocator → portfolio → RISK GA
 | `journal.py` | Append-only JSONL of every decision and its reasoning. |
 | `cycle.py` | One run of the whole thing. |
 | `ibkr.py` | IBKR adapter. **Unit-tested only — never run against a real gateway.** |
+| `marktomarket.py` | Marks the simulated book intraday. P/L arithmetic is pure and sign-pinned. |
+
+### Mutation testing
+
+Green tests are not evidence on their own — a delegated module can arrive with
+tests that assert only what its author already believed. Sign- and
+arithmetic-carrying code is therefore mutation-tested: flip the operator, and
+confirm the suite fails. Four mutations have survived here and been closed:
+
+| Survived mutation | Consequence had it shipped |
+|---|---|
+| Session P/L sign inverted | A losing session reported as a gain |
+| Per-sample P/L sign inverted | Every logged row's P/L backwards |
+| Sharpe sign inverted / annualisation dropped | Gate 0 decided on a number that could be backwards |
+| Index-membership boundaries shifted a day | Universe silently gains or loses names at every index change |
 
 ## Running it
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest                                    # 281 tests
+.venv/bin/pytest                                    # 403 tests
 .venv/bin/python -m ghambla.cli ingest              # ~45 min, 719 symbols
 .venv/bin/python -m ghambla.cli backtest --start 2018-01-01 --end 2026-08-01
 .venv/bin/python -m ghambla.cli evaluate --signal lowvol     # walk-forward Gate 0
