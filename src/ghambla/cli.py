@@ -22,6 +22,8 @@ from .quotes import YahooQuoteSource
 from .signals.fundamental import FundamentalSignal
 from .signals.lowvol import LowVolSignal
 from .signals.momentum import MomentumSignal
+from .signals.candles import CandleSignal
+from .signals.gap import GapSignal
 from .signals.reversal import ReversalSignal
 from .signals.news import CachedClassifier, NewsSignal, StubClassifier
 from .sp500 import (
@@ -197,7 +199,7 @@ def cmd_ingest_fundamentals(args) -> int:
     return 0
 
 
-SIGNAL_NAMES = ["momentum", "fundamental", "news", "lowvol", "reversal"]
+SIGNAL_NAMES = ["momentum", "fundamental", "news", "lowvol", "reversal", "candles", "gap"]
 
 
 def _signals(names):
@@ -221,6 +223,10 @@ def _signal(name):
         return LowVolSignal()
     if name == "reversal":
         return ReversalSignal()
+    if name == "candles":
+        return CandleSignal()
+    if name == "gap":
+        return GapSignal()
     return {"momentum": MomentumSignal, "fundamental": FundamentalSignal}[name]()
 
 
