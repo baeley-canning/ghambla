@@ -55,7 +55,7 @@ data → point-in-time store → signals → allocator → portfolio → RISK GA
 Green tests are not evidence on their own — a delegated module can arrive with
 tests that assert only what its author already believed. Sign- and
 arithmetic-carrying code is therefore mutation-tested: flip the operator, and
-confirm the suite fails. Four mutations have survived here and been closed:
+confirm the suite fails. Six mutations have survived here and been closed:
 
 | Survived mutation | Consequence had it shipped |
 |---|---|
@@ -63,13 +63,19 @@ confirm the suite fails. Four mutations have survived here and been closed:
 | Per-sample P/L sign inverted | Every logged row's P/L backwards |
 | Sharpe sign inverted / annualisation dropped | Gate 0 decided on a number that could be backwards |
 | Index-membership boundaries shifted a day | Universe silently gains or loses names at every index change |
+| Gate 1 correlation guard was exact-zero | A flat paper session could report ~+1 correlation and clear Gate 1 |
+| Crypto universe window relaxed to include the as-of day | Ranks today's winners using today's volume |
+
+A survivor is not always a missing test — twice it was a test that existed but
+could not fail: one compared magnitudes that tied under mutation and resolved
+correctly by luck, another guarded only one of two symmetric arguments.
 
 ## Running it
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest                                    # 403 tests
+.venv/bin/pytest                                    # 412 tests
 .venv/bin/python -m ghambla.cli ingest              # ~45 min, 719 symbols
 .venv/bin/python -m ghambla.cli backtest --start 2018-01-01 --end 2026-08-01
 .venv/bin/python -m ghambla.cli evaluate --signal lowvol     # walk-forward Gate 0
