@@ -116,3 +116,57 @@ Unchanged from every previous candidate, and applied by
 
 Every configuration run, pass or fail, in a single table. No configuration
 declared here may be omitted from the report on the grounds that it did badly.
+
+---
+
+# Results
+
+Run 2026-08-16. All four pre-registered configurations, none omitted.
+
+| Signal | Rebalance | Research windows passed | Holdout Sharpe edge | Verdict |
+|---|---|---|---|---|
+| `candles` | 21d | 0 of 4 | -0.23 | **FAIL** |
+| `candles` | 5d | 0 of 4 | -0.55 | **FAIL** |
+| `gap` | 21d | 0 of 4 | -1.02 | **FAIL** |
+| `gap` | 5d | 0 of 4 | -1.50 | **FAIL** |
+
+Per-window Sharpe edge, research windows then holdout:
+
+| Config | 2000-05 | 2005-10 | 2010-15 | 2015-21 | holdout 2021-26 |
+|---|---|---|---|---|---|
+| candles 21d | +0.05 | -0.14 | +0.00 | -0.34 | -0.23 |
+| candles 5d | +0.05 | -0.24 | -0.35 | -0.08 | -0.55 |
+| gap 21d | +0.09 | -0.05 | -1.10 | -0.74 | -1.02 |
+| gap 5d | +0.15 | -0.35 | -0.91 | -1.31 | -1.50 |
+
+Not one window out of twenty cleared +0.30. The best single figure anywhere in
+the table is +0.15, half the bar, in the oldest window.
+
+## What the numbers say
+
+**Gap continuation is the worst candidate this project has tested.** Drawdown
+fails in every window at both rebalance frequencies, and the holdout reaches
+-1.50. That is not noise around zero; it is a strategy reliably doing the wrong
+thing. Buying large caps that gapped up, after costs, destroys risk-adjusted
+return.
+
+**Trading more often makes both worse.** Every 5-day configuration is worse
+than its 21-day counterpart in the holdout (-0.55 vs -0.23; -1.50 vs -1.02).
+Five times the rebalances means five times the commission and spread against a
+signal that was not paying for one round of costs, let alone five.
+
+**The decay pattern repeats for the eighth and ninth time.** Both candidates
+post their least-bad number in 2000-2005 and their worst in the two most recent
+windows. Every signal this project has tested shows the same shape.
+
+## What is not being done
+
+The pre-registration fixed gap direction as continuation. The holdout is
+-1.02 and -1.50, and inverting a signal that is reliably wrong is an obvious
+temptation. **Gap-fade is candidate ten, not a re-run of candidate nine**, and
+choosing to test it *because* continuation failed is selection on the outcome.
+It is not being run here.
+
+No configuration is omitted from the table above, including the two that
+initially hit a 50-minute timeout and were re-run at a 4-hour limit. A timeout
+is not a result and was not reported as one.
