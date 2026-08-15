@@ -47,6 +47,7 @@ data → point-in-time store → signals → allocator → portfolio → RISK GA
 | `reconcile.py` | Compares belief against the broker. Any break halts trading. |
 | `journal.py` | Append-only JSONL of every decision and its reasoning. |
 | `cycle.py` | One run of the whole thing. |
+| `quotes.py` | Live quotes, **execution-only**. Never reaches a signal — a quote has no `knowable_at` and cannot be replayed. |
 | `ibkr.py` | IBKR adapter. **Unit-tested only — never run against a real gateway.** |
 | `marktomarket.py` | Marks the simulated book intraday. P/L arithmetic is pure and sign-pinned. |
 
@@ -75,7 +76,7 @@ correctly by luck, another guarded only one of two symmetric arguments.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest                                    # 412 tests
+.venv/bin/pytest                                    # 438 tests
 .venv/bin/python -m ghambla.cli ingest              # ~45 min, 719 symbols
 .venv/bin/python -m ghambla.cli backtest --start 2018-01-01 --end 2026-08-01
 .venv/bin/python -m ghambla.cli evaluate --signal lowvol     # walk-forward Gate 0
@@ -99,6 +100,18 @@ Run one decision cycle, and inspect what it decided:
 .venv/bin/python -m ghambla.cli cycle --broker simulated --halt   # kill switch
 .venv/bin/python -m ghambla.cli journal --tail 10
 ```
+
+Watch live quotes for specific symbols:
+
+```bash
+.venv/bin/python -m ghambla.cli watch --symbols AAPL MSFT SPY --count 1
+.venv/bin/python -m ghambla.cli watch --symbols AAPL --source ibkr --seconds 5
+```
+
+Quotes are execution-only. `DailyCycle` takes an optional `quote_source` that
+sets the price an order is sized and sent at; signals and the equity mark keep
+reading stored closes, so backtests stay reproducible and live/backtest parity
+is unaffected.
 
 `--broker ibkr` targets IB Gateway or TWS (paper Gateway 4002, live 4001;
 paper TWS 7497, live 7496). `--live` only selects the live port — **the account
