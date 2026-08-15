@@ -76,7 +76,7 @@ correctly by luck, another guarded only one of two symmetric arguments.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest                                    # 438 tests
+.venv/bin/pytest                                    # 533 tests
 .venv/bin/python -m ghambla.cli ingest              # ~45 min, 719 symbols
 .venv/bin/python -m ghambla.cli backtest --start 2018-01-01 --end 2026-08-01
 .venv/bin/python -m ghambla.cli evaluate --signal lowvol     # walk-forward Gate 0
@@ -116,6 +116,34 @@ is unaffected.
 `--broker ibkr` targets IB Gateway or TWS (paper Gateway 4002, live 4001;
 paper TWS 7497, live 7496). `--live` only selects the live port — **the account
 you log the gateway into is what decides whether the money is real.**
+
+## Is the gate itself a real test?
+
+Ten candidates have failed Gate 0. That means nothing until the gate is shown
+to be neither loose nor broken, which takes two experiments pulling in opposite
+directions — see
+[docs/analysis/gate_validation.md](docs/analysis/gate_validation.md).
+
+**Placebo** — 30 pure-noise portfolios through the identical gate: **0 passed**.
+Median holdout edge -0.33, best +0.06, and nothing random ever cleared 3 of 4
+windows. The gate does not pass luck.
+
+**Power** — a signal blending future returns with noise at tunable strength:
+
+| Strength | Windows | Holdout | Gate |
+|---|---|---|---|
+| 0.00 (noise) | 0/4 | -0.20 | fail |
+| 0.05 | 1/4 | +0.28 | fail |
+| **0.10** | **3/4** | **+0.67** | **PASS** |
+| 1.00 (perfect foresight) | 3/4 | +4.82 | PASS |
+
+The gate detects a real edge from about 10% strength. It is a valid test, so
+the ten failures mean what they appear to mean.
+
+**Where the signals actually sit:** the best real candidate (momentum, -0.12)
+does not reach even the best of 30 *random* portfolios (+0.06), let alone the
++0.67 detection floor. These are not near-misses on a hard bar; they are inside
+the noise distribution.
 
 ## Results so far
 
