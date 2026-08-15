@@ -76,3 +76,69 @@ def test_plain_shares_mapping_still_works(tmp_path):
 def test_missing_account_file_is_empty_not_a_crash(tmp_path):
     from ghambla.marktomarket import load_account
     assert load_account(tmp_path / "nope.json") == (0.0, {})
+
+
+# --- session P/L ---------------------------------------------------------
+#
+# These exist because a mutation battery inverted the P/L sign in two places
+# and the whole suite stayed green. A loss reported as a gain is the one error
+# in this module that would actually mislead someone about their money.
+
+from ghambla.marktomarket import format_summary, pnl_record, session_summary
+
+
+def test_a_falling_book_reports_a_loss():
+    s = session_summary(first_value=10_000.0, last_value=9_000.0,
+                        samples=5, regular_samples=5)
+    assert s.pnl == pytest.approx(-1_000.0)
+    assert s.pct == pytest.approx(-10.0)
+
+
+def test_a_rising_book_reports_a_gain():
+    s = session_summary(first_value=10_000.0, last_value=11_500.0,
+                        samples=5, regular_samples=5)
+    assert s.pnl == pytest.approx(1_500.0)
+    assert s.pct == pytest.approx(15.0)
+
+
+def test_an_unchanged_book_is_flat():
+    s = session_summary(10_000.0, 10_000.0, 3, 3)
+    assert s.pnl == 0.0
+    assert s.pct == 0.0
+
+
+def test_zero_starting_value_does_not_divide_by_zero():
+    s = session_summary(first_value=0.0, last_value=500.0,
+                        samples=2, regular_samples=1)
+    assert s.pnl == pytest.approx(500.0)
+    assert s.pct == 0.0
+
+
+def test_per_sample_pnl_is_measured_against_the_session_open():
+    down = pnl_record("t", value=9_800.0, cash=100.0, priced=3, missing=0,
+                      market_state="REGULAR", first_value=10_000.0)
+    up = pnl_record("t", value=10_200.0, cash=100.0, priced=3, missing=0,
+                    market_state="REGULAR", first_value=10_000.0)
+    assert down["pnl"] == pytest.approx(-200.0)
+    assert up["pnl"] == pytest.approx(200.0)
+
+
+def test_sample_row_keeps_the_log_schema():
+    row = pnl_record("2026-08-16T00:00:00+00:00", 10_000.0, 250.0, 4, 1,
+                     "CLOSED", 10_000.0)
+    assert list(row) == ["ts", "value", "cash", "priced", "missing",
+                         "market_state", "pnl"]
+    assert row["market_state"] == "CLOSED"
+    assert row["missing"] == 1
+
+
+def test_a_loss_prints_with_a_minus_sign():
+    """The number a human actually reads must not lose its sign."""
+    text = format_summary(session_summary(10_000.0, 9_000.0, 5, 5))
+    assert "P/L:         -1000.00 (-10.00%)" in text
+    assert text.startswith("Final summary:")
+
+
+def test_summary_reports_how_many_samples_were_in_session():
+    text = format_summary(session_summary(100.0, 110.0, 10, 4))
+    assert "Regular session samples: 4 of 10" in text

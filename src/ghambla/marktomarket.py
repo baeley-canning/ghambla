@@ -12,6 +12,7 @@ import json
 import time
 import urllib.request
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -115,6 +116,57 @@ def load_account(path: str) -> tuple[float, dict[str, float]]:
         return 0.0, {}
 
 
+def pnl_record(ts: str, value: float, cash: float, priced: int, missing: int,
+               market_state: str, first_value: float) -> dict:
+    """One sample row for the JSONL log."""
+    return {
+        "ts": ts,
+        "value": value,
+        "cash": cash,
+        "priced": priced,
+        "missing": missing,
+        "market_state": market_state,
+        "pnl": value - first_value,
+    }
+
+
+@dataclass(frozen=True)
+class SessionSummary:
+    first_value: float
+    last_value: float
+    pnl: float
+    pct: float
+    samples: int
+    regular_samples: int
+
+
+def session_summary(first_value: float, last_value: float, samples: int,
+                    regular_samples: int) -> SessionSummary:
+    """Session P/L. `pnl` is last minus first, so a fall is negative."""
+    pnl = last_value - first_value
+    pct = (pnl / first_value * 100) if first_value != 0 else 0.0
+    return SessionSummary(
+        first_value=first_value,
+        last_value=last_value,
+        pnl=pnl,
+        pct=pct,
+        samples=samples,
+        regular_samples=regular_samples,
+    )
+
+
+def format_summary(summary: SessionSummary) -> str:
+    """The final summary block, as printed today."""
+    return "\n".join([
+        "Final summary:",
+        f"  First value: {summary.first_value:.2f}",
+        f"  Last value:  {summary.last_value:.2f}",
+        f"  P/L:         {summary.pnl:.2f} ({summary.pct:.2f}%)",
+        f"  Samples:     {summary.samples}",
+        f"  Regular session samples: {summary.regular_samples} of {summary.samples}",
+    ])
+
+
 def track(
     minutes: int = 180,
     every_seconds: int = 300,
@@ -151,15 +203,15 @@ def track(
         if market_state == "REGULAR":
             regular_samples += 1
 
-        record = {
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "value": value,
-            "cash": cash,
-            "priced": priced,
-            "missing": missing,
-            "market_state": market_state,
-            "pnl": value - first_value,
-        }
+        record = pnl_record(
+            ts=datetime.now(timezone.utc).isoformat(),
+            value=value,
+            cash=cash,
+            priced=priced,
+            missing=missing,
+            market_state=market_state,
+            first_value=first_value,
+        )
         with open(out_path, "a") as f:
             f.write(json.dumps(record) + "\n")
 
@@ -175,14 +227,13 @@ def track(
         print("No samples taken.")
         return
 
-    pnl = last_value - first_value
-    pct = (pnl / first_value * 100) if first_value != 0 else 0.0
-    print("\nFinal summary:")
-    print(f"  First value: {first_value:.2f}")
-    print(f"  Last value:  {last_value:.2f}")
-    print(f"  P/L:         {pnl:.2f} ({pct:.2f}%)")
-    print(f"  Samples:     {samples}")
-    print(f"  Regular session samples: {regular_samples} of {samples}")
+    summary = session_summary(
+        first_value=first_value,
+        last_value=last_value,
+        samples=samples,
+        regular_samples=regular_samples,
+    )
+    print("\n" + format_summary(summary))
 
 
 if __name__ == "__main__":
