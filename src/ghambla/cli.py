@@ -19,7 +19,8 @@ from .evaluate import (GATE_0_SHARPE_EDGE, buy_and_hold, compute_metrics,
                        format_report)
 from .walkforward import format_walk_forward, run_walk_forward
 from .edgar import EdgarClient, fetch_fundamentals
-from .placebo import format_placebo, run_placebo
+from .placebo import (format_placebo, format_power_study, run_placebo,
+                      run_power_study)
 from .quotes import YahooQuoteSource
 from .signals.fundamental import FundamentalSignal
 from .signals.lowvol import LowVolSignal
@@ -459,6 +460,32 @@ def cmd_placebo(args) -> int:
     return 0
 
 
+def cmd_power(args) -> int:
+    """Positive control: can the gate detect an edge that is definitely there?"""
+    if not pathlib.Path(args.db).exists():
+        print(f"No database at {args.db}. Run `ingest` first.", file=sys.stderr)
+        return 1
+    store = FeatureStore(args.db)
+    try:
+        print(f"Power study, {args.start} .. {args.end}, "
+              f"top {args.top_n}, rebalance {args.rebalance_every}d ...", flush=True)
+
+        def progress(done, total, strength, t):
+            print(f"  {done}/{total}: strength {strength:.2f} -> "
+                  f"{t.research_passed}/{t.research_total} windows, "
+                  f"holdout {t.holdout_edge:+.2f} "
+                  f"{'PASS' if t.gate_passed else 'fail'}", flush=True)
+
+        rows = run_power_study(store, args.start, args.end, top_n=args.top_n,
+                               rebalance_every=args.rebalance_every,
+                               on_progress=progress)
+        print()
+        print(format_power_study(rows))
+    finally:
+        store.close()
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="ghambla")
     p.add_argument("--db", default=DEFAULT_DB)
@@ -582,6 +609,13 @@ def main(argv=None) -> int:
     pp.add_argument("--top-n", type=int, default=10)
     pp.add_argument("--rebalance-every", type=int, default=21)
     pp.set_defaults(func=cmd_placebo)
+
+    pw = sub.add_parser("power", help="positive control: can the gate detect a real edge?")
+    pw.add_argument("--start", type=_date, default=_date("2000-01-01"))
+    pw.add_argument("--end", type=_date, default=_date("2026-08-01"))
+    pw.add_argument("--top-n", type=int, default=10)
+    pw.add_argument("--rebalance-every", type=int, default=21)
+    pw.set_defaults(func=cmd_power)
 
     args = p.parse_args(argv)
     return args.func(args)

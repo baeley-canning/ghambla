@@ -165,3 +165,81 @@ def test_progress_is_reported(store):
     run_placebo(store, d("2024-02-01"), d("2025-03-01"), trials=2, top_n=2,
                 on_progress=lambda done, total, t: seen.append((done, total)))
     assert seen == [(1, 2), (2, 2)]
+
+
+# --- positive control -----------------------------------------------------
+#
+# The placebo showed 0/30 random portfolios passing. That proves the gate does
+# not pass noise; it does NOT prove the gate can pass anything, because a gate
+# that rejects everything scores the same 0%. OracleSignal has a known, tunable
+# edge, so it measures detection power rather than false positives.
+
+from ghambla.placebo import OracleSignal, format_power_study, run_power_study
+
+
+def test_oracle_rejects_a_strength_outside_the_unit_range():
+    with pytest.raises(ValueError):
+        OracleSignal(strength=1.5)
+    with pytest.raises(ValueError):
+        OracleSignal(strength=-0.1)
+
+
+def test_perfect_foresight_ranks_the_best_future_performer_top(store):
+    """If this fails the control is not a control and the power study is void."""
+    as_of = d("2024-06-01")
+    scores = OracleSignal(strength=1.0, horizon_days=21).score(store, as_of, UNIVERSE)
+    scored = {s: v for s, v in scores.items() if v.confidence > 0}
+    assert scored, "oracle saw no future at all"
+
+    future = {}
+    for sym in scored:
+        bars = store._conn.execute(
+            "SELECT adj_close FROM bars WHERE symbol=? AND date>? ORDER BY date LIMIT 21",
+            (sym, as_of.isoformat())).fetchall()
+        now = store.latest_bars_as_of(as_of, [sym]).get(sym)
+        if bars and now:
+            future[sym] = bars[-1]["adj_close"] / now.adj_close - 1.0
+
+    best_by_oracle = max(scored, key=lambda s: scored[s].value)
+    best_actually = max(future, key=lambda s: future[s])
+    assert best_by_oracle == best_actually
+
+
+def test_zero_strength_oracle_matches_the_random_signal(store):
+    """strength=0 must be pure noise, or the power curve has no clean origin."""
+    as_of = d("2024-06-01")
+    oracle = OracleSignal(strength=0.0, seed=5).score(store, as_of, UNIVERSE)
+    noise = RandomSignal(seed=5).score(ExplodingStore(), as_of, UNIVERSE)
+    for sym in UNIVERSE:
+        if oracle[sym].confidence > 0:
+            assert oracle[sym].value == pytest.approx(noise[sym].value)
+
+
+def test_a_symbol_with_no_future_bar_abstains(store):
+    """At the very end of the data there is no future to peek at, and a zero
+    there would read as a genuine flat forecast."""
+    last = store.trading_dates(d("2024-01-01"), d("2026-12-31"))[-1]
+    scores = OracleSignal(strength=1.0).score(store, last, UNIVERSE)
+    assert all(s.confidence == 0.0 for s in scores.values())
+
+
+def test_stronger_foresight_ranks_closer_to_the_truth(store):
+    """Monotonicity: more strength means the ranking tracks the future better."""
+    as_of = d("2024-06-01")
+    weak = OracleSignal(strength=0.05, seed=1).score(store, as_of, UNIVERSE)
+    strong = OracleSignal(strength=1.0, seed=1).score(store, as_of, UNIVERSE)
+    assert [s for s in weak] == [s for s in strong]
+    assert weak != strong
+
+
+def test_power_study_returns_one_row_per_strength(store):
+    rows = run_power_study(store, d("2024-02-01"), d("2025-03-01"),
+                           strengths=(0.0, 1.0), top_n=2, rebalance_every=21)
+    assert [r[0] for r in rows] == [0.0, 1.0]
+
+
+def test_power_report_names_the_detection_floor(store):
+    rows = run_power_study(store, d("2024-02-01"), d("2025-03-01"),
+                           strengths=(0.0, 1.0), top_n=2, rebalance_every=21)
+    text = format_power_study(rows)
+    assert "strength" in text.lower()
