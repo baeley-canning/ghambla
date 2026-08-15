@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 from .backtest import BacktestResult, Trade
 from .costs import ibkr_tiered_commission
+from .papercheck import VARIANCE_EPSILON
 from .store.store import FeatureStore
 
 TRADING_DAYS_PER_YEAR = 252
@@ -28,6 +29,16 @@ class Metrics:
     sharpe: float
     max_drawdown: float
     n_trades: int
+
+
+@dataclass(frozen=True)
+class Attribution:
+    alpha_annual: float      # CAPM intercept, annualised
+    beta: float
+    information_ratio: float # annualised active return / tracking error
+    tracking_error: float    # annualised stdev of active return
+    active_return: float     # annualised mean of (strategy - benchmark)
+    n_days: int
 
 
 def compute_metrics(dates: list[dt.date], equity: list[float], n_trades: int) -> Metrics:
@@ -85,7 +96,87 @@ def buy_and_hold(store: FeatureStore, symbol: str, start: dt.date, end: dt.date,
     return BacktestResult(dates=kept, equity=equity, trades=[trade])
 
 
-def format_report(strategy: Metrics, benchmark: Metrics, benchmark_symbol: str) -> str:
+def align_returns(strategy_dates, strategy_equity,
+                  benchmark_dates, benchmark_equity) -> tuple[list[float], list[float]]:
+    """Daily returns for the dates the two series share.
+
+    Matching on date rather than position matters because two backtests can
+    skip different days; zipping by index would silently compare Monday
+    against Tuesday and corrupt every downstream statistic.
+    """
+    strat_by_date = dict(zip(strategy_dates, strategy_equity))
+    bench_by_date = dict(zip(benchmark_dates, benchmark_equity))
+    common = sorted(set(strat_by_date) & set(bench_by_date))
+    if len(common) < 2:
+        return [], []
+
+    strat_eq = [strat_by_date[d] for d in common]
+    bench_eq = [bench_by_date[d] for d in common]
+    strat_rets = [strat_eq[i] / strat_eq[i - 1] - 1.0
+                  for i in range(1, len(strat_eq)) if strat_eq[i - 1] > 0]
+    bench_rets = [bench_eq[i] / bench_eq[i - 1] - 1.0
+                  for i in range(1, len(bench_eq)) if bench_eq[i - 1] > 0]
+    return strat_rets, bench_rets
+
+
+def attribution(strategy_dates, strategy_equity,
+                benchmark_dates, benchmark_equity) -> Attribution:
+    """CAPM-style alpha, beta, and information ratio against a benchmark.
+
+    A zero risk-free rate is assumed, as everywhere else in this module.
+    These numbers separate skill from volatility: a concentrated long-only
+    portfolio carries full market beta plus idiosyncratic variance, so it can
+    beat the benchmark on return while losing on Sharpe. Alpha and information
+    ratio measure the active edge directly.
+    """
+    strat_rets, bench_rets = align_returns(strategy_dates, strategy_equity,
+                                           benchmark_dates, benchmark_equity)
+    n = len(strat_rets)
+    if n < 3:
+        return Attribution(0.0, 0.0, 0.0, 0.0, 0.0, n)
+
+    # Beta: covariance / variance of benchmark, guarding against a constant
+    # benchmark series where floating point yields a rounding-scale variance.
+    m_s, m_b = statistics.fmean(strat_rets), statistics.fmean(bench_rets)
+    cov = sum((s - m_s) * (b - m_b) for s, b in zip(strat_rets, bench_rets)) / (n - 1)
+    var_b = sum((b - m_b) ** 2 for b in bench_rets) / (n - 1)
+    if var_b <= VARIANCE_EPSILON * max(1.0, sum(b * b for b in bench_rets) / n):
+        beta = 0.0
+    else:
+        beta = cov / var_b
+
+    alpha = (m_s - beta * m_b) * TRADING_DAYS_PER_YEAR
+
+    active = [s - b for s, b in zip(strat_rets, bench_rets)]
+    active_return = statistics.fmean(active) * TRADING_DAYS_PER_YEAR
+    tracking_error = statistics.stdev(active) * math.sqrt(TRADING_DAYS_PER_YEAR)
+    information_ratio = 0.0 if tracking_error <= VARIANCE_EPSILON else active_return / tracking_error
+
+    return Attribution(alpha_annual=alpha, beta=beta,
+                       information_ratio=information_ratio,
+                       tracking_error=tracking_error,
+                       active_return=active_return, n_days=n)
+
+
+def format_attribution(attr: Attribution) -> str:
+    lines = [
+        f"Beta:                    {attr.beta:.2f}",
+        f"Annualised alpha:        {attr.alpha_annual:+.2%}",
+        f"Information ratio:       {attr.information_ratio:.2f}",
+        f"Tracking error:          {attr.tracking_error:.2%}",
+        f"Aligned days:            {attr.n_days}",
+    ]
+    return "\n".join(lines)
+
+
+def format_report(strategy: Metrics, benchmark: Metrics, benchmark_symbol: str,
+                  attr: Attribution | None = None) -> str:
+    """Format the Gate 0 report, optionally with diagnostic attribution.
+
+    The attribution block is diagnostic only — it explains a Sharpe failure
+    (e.g. a high-beta strategy penalised for idiosyncratic variance) but does
+    not move the pre-registered Gate 0 threshold.
+    """
     rows = [
         ("Total return", f"{strategy.total_return:+.2%}", f"{benchmark.total_return:+.2%}"),
         ("CAGR", f"{strategy.cagr:+.2%}", f"{benchmark.cagr:+.2%}"),
@@ -97,6 +188,11 @@ def format_report(strategy: Metrics, benchmark: Metrics, benchmark_symbol: str) 
     lines = [f"{'Metric':<{width}}  {'Strategy':>12}  {benchmark_symbol:>12}",
              "-" * (width + 28)]
     lines += [f"{name:<{width}}  {a:>12}  {b:>12}" for name, a, b in rows]
+
+    if attr is not None:
+        lines.append("")
+        lines.append("Attribution (diagnostic — does not affect the gate):")
+        lines.append(format_attribution(attr))
 
     edge = strategy.sharpe - benchmark.sharpe
     drawdown_ok = strategy.max_drawdown >= benchmark.max_drawdown
