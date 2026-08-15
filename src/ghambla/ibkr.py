@@ -18,8 +18,11 @@ warning — it is not a safety mechanism, and the account you log the gateway
 into is what actually decides whether the money is real.
 """
 import datetime as dt
+import math
+from typing import Sequence
 
 from .broker import AccountSnapshot, Fill, Order, OrderError, Position
+from .quotes import Quote
 
 PAPER_GATEWAY_PORT = 4002
 LIVE_GATEWAY_PORT = 4001
@@ -28,6 +31,9 @@ LIVE_TWS_PORT = 7496
 
 # IBKR reports these statuses when an order will never fill.
 DEAD_STATUSES = {"Cancelled", "ApiCancelled", "Inactive"}
+
+# Poll interval while waiting for a snapshot to populate.
+QUOTE_SETTLE_SECONDS = 0.25
 
 
 def default_host() -> str:
@@ -75,7 +81,8 @@ class IBKRBroker:
 
     def __init__(self, host: str | None = None, port: int | None = None,
                  client_id: int = 1, live: bool = False,
-                 account: str = "", ib=None, fill_timeout: float = 60.0) -> None:
+                 account: str = "", ib=None, fill_timeout: float = 60.0,
+                 quote_timeout: float = 5.0) -> None:
         self.host = host if host is not None else default_host()
         self.live = live
         self.port = port if port is not None else (
@@ -83,6 +90,7 @@ class IBKRBroker:
         self.client_id = client_id
         self.account = account
         self.fill_timeout = fill_timeout
+        self.quote_timeout = quote_timeout
         self._ib = ib  # injected for tests; created on connect otherwise
 
     # --- connection ---
@@ -119,6 +127,63 @@ class IBKRBroker:
                 cash = float(row.value)
                 break
         return AccountSnapshot(cash=cash, positions=positions)
+
+    # --- quotes ---
+
+    def quotes(self, symbols: Sequence[str]) -> dict[str, Quote]:
+        """Snapshot quotes for execution and reporting only.
+
+        A live quote must never reach a signal — signals read the point-in-time
+        store and nothing else. This is a snapshot, not a subscription, so no
+        streaming handles leak. A symbol with no usable price is simply absent
+        from the returned dict.
+        """
+        from ib_async import Stock
+
+        quotes: dict[str, Quote] = {}
+        for symbol in symbols:
+            contract = Stock(symbol, "SMART", "USD")
+            self._ib.qualifyContracts(contract)
+            self._ib.reqMktData(contract, "", True, False)
+
+            deadline = dt.datetime.now(dt.UTC) + dt.timedelta(seconds=self.quote_timeout)
+            while dt.datetime.now(dt.UTC) < deadline:
+                if hasattr(self._ib, "sleep"):
+                    self._ib.sleep(QUOTE_SETTLE_SECONDS)
+                else:
+                    self._ib.waitOnUpdate(timeout=QUOTE_SETTLE_SECONDS)
+                ticker = self._ib.ticker(contract)
+                last = getattr(ticker, "last", None)
+                bid = getattr(ticker, "bid", None)
+                ask = getattr(ticker, "ask", None)
+                if any(
+                    v is not None and not math.isnan(v) and v > 0
+                    for v in (last, bid, ask)
+                ):
+                    break
+
+            ticker = self._ib.ticker(contract)
+            last = getattr(ticker, "last", None)
+            bid = getattr(ticker, "bid", None)
+            ask = getattr(ticker, "ask", None)
+
+            def clean(v):
+                if v is None or math.isnan(v) or v <= 0:
+                    return None
+                return float(v)
+
+            last_c, bid_c, ask_c = clean(last), clean(bid), clean(ask)
+            if last_c is None and bid_c is None and ask_c is None:
+                continue
+            quotes[symbol] = Quote(
+                symbol=symbol,
+                last=last_c,
+                bid=bid_c,
+                ask=ask_c,
+                at=dt.datetime.now(dt.UTC),
+                source="ibkr",
+            )
+        return quotes
 
     # --- trading ---
 

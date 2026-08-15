@@ -58,7 +58,8 @@ class DailyCycle:
                  top_n: int = 10, cash_buffer: float = CASH_BUFFER,
                  weighting: str = "equal",
                  regime_filter: bool = False,
-                 regime_lookback: int = 200) -> None:
+                 regime_lookback: int = 200,
+                 quote_source=None) -> None:
         # Validate eagerly so a bad weighting fails at construction, not
         # mid-trading-day when the cycle is already running.
         if weighting not in WEIGHTINGS:
@@ -75,6 +76,7 @@ class DailyCycle:
         self.weighting = weighting
         self.regime_filter = regime_filter
         self.regime_lookback = regime_lookback
+        self.quote_source = quote_source
 
     def run(self, as_of: dt.date, halt: bool = False) -> CycleResult:
         started = dt.datetime.now(dt.UTC)
@@ -133,9 +135,27 @@ class DailyCycle:
         orders, fills = [], []
         if decision.allowed:
             investable = equity * (1.0 - self.cash_buffer)
-            orders = self._orders_for(decision, actual_positions, prices, investable)
+            # Quotes are execution-only: they have no knowable_at and would
+            # make backtests unreproducible, so they must never reach a signal.
+            # Sizing and execution must use the same price or orders get
+            # rejected (quote above close) or mis-sized (quote below close).
+            execution_prices = dict(prices)
+            if self.quote_source is not None:
+                symbols = sorted(set(actual_positions) | set(decision.targets))
+                try:
+                    quotes = self.quote_source.quotes(symbols)
+                    for symbol in symbols:
+                        quote = quotes.get(symbol)
+                        if quote is not None and quote.mid is not None:
+                            execution_prices[symbol] = quote.mid
+                        else:
+                            notes.append(f"no live quote for {symbol}, using stored close")
+                except Exception as exc:
+                    notes.append(f"quote source failed: {type(exc).__name__}: {exc}")
+                    execution_prices = prices
+            orders = self._orders_for(decision, actual_positions, execution_prices, investable)
             for order in orders:
-                price = prices.get(order.symbol)
+                price = execution_prices.get(order.symbol)
                 if price is None:
                     notes.append(f"no price for {order.symbol}, skipped")
                     continue

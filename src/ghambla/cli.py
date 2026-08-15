@@ -8,6 +8,7 @@ import datetime as dt
 import json
 import pathlib
 import sys
+import time
 
 from .backtest import WEIGHTINGS, run_backtest, signals_name
 from .broker import SimulatedBroker
@@ -17,6 +18,7 @@ from .risk import RiskGate, RiskLimits
 from .evaluate import buy_and_hold, compute_metrics, format_report
 from .walkforward import format_walk_forward, run_walk_forward
 from .edgar import EdgarClient, fetch_fundamentals
+from .quotes import YahooQuoteSource
 from .signals.fundamental import FundamentalSignal
 from .signals.lowvol import LowVolSignal
 from .signals.momentum import MomentumSignal
@@ -318,6 +320,62 @@ def cmd_cycle(args) -> int:
     return 0
 
 
+def cmd_watch(args) -> int:
+    """Watch live quotes for execution and reporting only.
+
+    A live quote must never reach a signal. Signals read the point-in-time
+    store and nothing else. A quote has no knowable_at, cannot be replayed,
+    and would make every backtest number unreproducible. Live quotes are for
+    execution and reporting only.
+    """
+    if args.source == "yahoo":
+        source = YahooQuoteSource()
+    else:
+        from .ibkr import IBKRBroker
+        broker = IBKRBroker(host=args.host, port=args.port, live=args.live)
+        if args.live:
+            print("!! LIVE MODE: quotes from the live gateway.", file=sys.stderr)
+        try:
+            broker.connect()
+        except (ConnectionRefusedError, OSError, TimeoutError) as exc:
+            print(f"Could not reach the broker at {getattr(broker, 'host', '?')}:"
+                  f"{getattr(broker, 'port', '?')} — {exc}.\n"
+                  f"IB Gateway or TWS must be running with the API enabled "
+                  f"(paper Gateway 4002, live Gateway 4001, "
+                  f"paper TWS 7497, live TWS 7496).", file=sys.stderr)
+            return 1
+        try:
+            source = broker
+        finally:
+            # Keep the connection open for the watch loop; disconnect below.
+            pass
+
+    def fmt(v):
+        return "—" if v is None else f"{v:.2f}"
+
+    try:
+        poll = 0
+        while args.count == 0 or poll < args.count:
+            quotes = source.quotes(args.symbols)
+            now = dt.datetime.now().strftime("%H:%M:%S")
+            for symbol in args.symbols:
+                q = quotes.get(symbol)
+                if q is None:
+                    print(f"{now} {symbol:<8} last=— bid=— ask=— mid=—")
+                else:
+                    print(f"{now} {symbol:<8} last={fmt(q.last)} bid={fmt(q.bid)} "
+                          f"ask={fmt(q.ask)} mid={fmt(q.mid)}")
+            poll += 1
+            if args.count == 0 or poll < args.count:
+                time.sleep(args.seconds)
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        if args.source == "ibkr":
+            broker.disconnect()
+    return 0
+
+
 def cmd_evaluate(args) -> int:
     """Walk-forward Gate 0 evaluation for a signal, with a held-out tail."""
     if not pathlib.Path(args.db).exists():
@@ -461,6 +519,21 @@ def main(argv=None) -> int:
                     help="use the live gateway port; the account you log in decides real money")
     pc.add_argument("--halt", action="store_true", help="kill switch: block all trading")
     pc.set_defaults(func=cmd_cycle)
+
+    pw = sub.add_parser("watch", help="watch live quotes for execution and reporting")
+    pw.add_argument("--symbols", nargs="+", required=True,
+                    help="one or more symbols to watch")
+    pw.add_argument("--source", choices=["yahoo", "ibkr"], default="yahoo",
+                    help="quote source (default: yahoo)")
+    pw.add_argument("--seconds", type=float, default=15,
+                    help="poll interval in seconds (default: 15)")
+    pw.add_argument("--count", type=int, default=0,
+                    help="number of polls; 0 means run until interrupted (default: 0)")
+    pw.add_argument("--host", default="127.0.0.1")
+    pw.add_argument("--port", type=int, default=None)
+    pw.add_argument("--live", action="store_true",
+                    help="use the live gateway port; the account you log in decides real money")
+    pw.set_defaults(func=cmd_watch)
 
     pj = sub.add_parser("journal", help="show recent decision cycles")
     pj.add_argument("--journal", default=JOURNAL_PATH)
