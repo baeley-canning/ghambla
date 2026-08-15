@@ -22,6 +22,10 @@ from .vol import realised_vols
 
 MIN_TRADE_VALUE = 1.0  # below this, an order is dust and is skipped
 
+# Signals look back up to a year, so the cache has to begin well before the
+# first decision or every early read misses it.
+PRELOAD_WARMUP_DAYS = 500
+
 
 def as_signal_map(signals) -> dict:
     """Accept one signal or a `name -> signal` mapping; always return a mapping."""
@@ -95,7 +99,8 @@ def run_backtest(store: FeatureStore, signals, start: dt.date, end: dt.date,
                  stale_days: int = 5, allocator: RankAllocator | None = None,
                  weighting: str = "equal", vol_lookback: int = 252,
                  regime_filter: bool = False, regime_lookback: int = 200,
-                 risk_gate=None, cash_buffer: float = 0.0
+                 risk_gate=None, cash_buffer: float = 0.0,
+                 *, preload: bool = True
                  ) -> BacktestResult:
     """`signals` is one signal, or a `name -> signal` mapping combined by rank.
 
@@ -117,6 +122,14 @@ def run_backtest(store: FeatureStore, signals, start: dt.date, end: dt.date,
     dates = store.trading_dates(start, end)
     if not dates:
         return BacktestResult()
+
+    if preload:
+        # The cache is an optimisation; a run that cannot cache must still
+        # produce the same numbers, only slower.
+        try:
+            store.preload(start - dt.timedelta(days=PRELOAD_WARMUP_DAYS), end)
+        except Exception:
+            pass
 
     cash = initial_cash
     positions: dict[str, float] = {}
