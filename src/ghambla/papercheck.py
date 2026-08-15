@@ -20,6 +20,7 @@ from .journal import Journal
 
 GATE_1_MIN_CORRELATION = 0.90
 GATE_1_MAX_CUMULATIVE_DIFF = 0.03  # 3 percentage points
+VARIANCE_EPSILON = 1e-12
 
 
 @dataclass(frozen=True)
@@ -45,13 +46,22 @@ def _daily_returns(equity: list[float]) -> list[float]:
 
 
 def _correlation(xs: list[float], ys: list[float]) -> float:
+    """Return Pearson correlation, guarding against near-zero variance.
+
+    An exact-zero check misses a constant series: floating point yields a
+    rounding-scale denominator, and dividing two rounding-scale numbers gives
+    an arbitrary correlation that Gate 1 would misread as a match.
+    """
     if len(xs) < 2 or len(xs) != len(ys):
         return 0.0
     mx, my = statistics.fmean(xs), statistics.fmean(ys)
     num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
-    den = math.sqrt(sum((x - mx) ** 2 for x in xs) *
-                    sum((y - my) ** 2 for y in ys))
-    return 0.0 if den == 0 else num / den
+    sxx = sum((x - mx) ** 2 for x in xs)
+    syy = sum((y - my) ** 2 for y in ys)
+    if (sxx <= VARIANCE_EPSILON * max(1.0, sum(x * x for x in xs) / len(xs)) or
+            syy <= VARIANCE_EPSILON * max(1.0, sum(y * y for y in ys) / len(ys))):
+        return 0.0
+    return num / math.sqrt(sxx * syy)
 
 
 def papercheck(journal: Journal, store, signal, start: dt.date, end: dt.date,

@@ -56,11 +56,38 @@ def test_universe_is_dated_and_uses_only_prior_volume():
 
     Picking today's biggest names using today's volume is the same lookahead
     that survivorship bias is in equities: it selects the winners in advance.
+
+    The magnitudes matter. With 100/1 against 1/100 the two totals tie at 101
+    once the as-of day leaks in, and the tie can still resolve to AAA — so this
+    test passed even with the boundary relaxed. BBB's second day is large
+    enough here that leaking it flips the answer outright.
     """
     vols = {"AAA": {dt.date(2026, 8, 1): 100.0, dt.date(2026, 8, 2): 1.0},
-            "BBB": {dt.date(2026, 8, 1): 1.0, dt.date(2026, 8, 2): 100.0}}
+            "BBB": {dt.date(2026, 8, 1): 1.0, dt.date(2026, 8, 2): 1000.0}}
     chosen = dated_universe(vols, dt.date(2026, 8, 2), top_n=1, lookback_days=1)
     assert chosen == ["AAA"], "must rank on 08-01 volume, not 08-02"
+
+
+def test_universe_excludes_the_as_of_day_itself():
+    """The window is closed at the start and open at the end: [start, as_of).
+
+    Pinning both ends, because relaxing the upper bound to `<= as_of` is a
+    one-character change that reintroduces exactly the lookahead the function
+    exists to prevent.
+    """
+    vols = {"EDGE": {dt.date(2026, 8, 1): 0.0, dt.date(2026, 8, 2): 500.0}}
+    assert dated_universe(vols, dt.date(2026, 8, 2), top_n=5, lookback_days=1) == []
+
+
+def test_universe_includes_the_first_day_of_the_window():
+    vols = {"EDGE": {dt.date(2026, 8, 1): 500.0}}
+    assert dated_universe(vols, dt.date(2026, 8, 2), top_n=5, lookback_days=1) == ["EDGE"]
+
+
+def test_universe_excludes_volume_older_than_the_lookback():
+    vols = {"OLD": {dt.date(2026, 7, 1): 9999.0},
+            "NEW": {dt.date(2026, 8, 1): 5.0}}
+    assert dated_universe(vols, dt.date(2026, 8, 2), top_n=5, lookback_days=1) == ["NEW"]
 
 
 def test_universe_handles_too_few_names():

@@ -122,3 +122,45 @@ def test_format_insufficient_data_fails():
 def test_gate_constants_match_the_spec():
     assert GATE_1_MIN_CORRELATION == 0.90
     assert GATE_1_MAX_CUMULATIVE_DIFF == 0.03
+
+# --- degenerate curves ----------------------------------------------------
+#
+# Removing the zero-denominator guard in _correlation left the whole suite
+# green, which means no test ever fed it a flat series. A paper session that
+# holds nothing — or holds through a closed market — has constant equity and
+# zero variance, so Gate 1 would have died with ZeroDivisionError on exactly
+# the quiet day it was meant to report on.
+
+def test_correlation_of_a_flat_series_is_zero_not_a_crash():
+    flat = [0.0, 0.0, 0.0, 0.0]
+    varying = [0.01, -0.02, 0.03, -0.01]
+    assert _correlation(flat, varying) == 0.0
+
+
+def test_correlation_is_zero_when_the_second_series_is_flat():
+    """The mirror of the case above. Guarding only one side left this
+    untested: paper could be flat while the backtest moved, or vice versa,
+    and only one of those was caught."""
+    varying = [0.01, -0.02, 0.03, -0.01]
+    flat = [0.0, 0.0, 0.0, 0.0]
+    assert _correlation(varying, flat) == 0.0
+
+
+def test_correlation_is_symmetric_in_its_arguments():
+    a = [0.01, -0.02, 0.03, -0.01]
+    b = [0.02, -0.01, 0.04, 0.00]
+    assert _correlation(a, b) == pytest.approx(_correlation(b, a))
+
+
+def test_correlation_of_two_flat_series_is_zero_not_a_crash():
+    assert _correlation([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]) == 0.0
+
+
+def test_correlation_of_a_constant_nonzero_series_is_zero():
+    """Constant but non-zero still has zero variance."""
+    assert _correlation([0.05, 0.05, 0.05], [0.01, 0.02, 0.03]) == 0.0
+
+
+def test_a_flat_equity_curve_yields_no_returns_variance():
+    """The upstream shape that produces the flat series above."""
+    assert _daily_returns([100.0, 100.0, 100.0]) == [0.0, 0.0]
