@@ -15,9 +15,11 @@ from .broker import SimulatedBroker
 from .cycle import CASH_BUFFER, DailyCycle
 from .journal import Journal
 from .risk import RiskGate, RiskLimits
-from .evaluate import buy_and_hold, compute_metrics, format_report
+from .evaluate import (GATE_0_SHARPE_EDGE, buy_and_hold, compute_metrics,
+                       format_report)
 from .walkforward import format_walk_forward, run_walk_forward
 from .edgar import EdgarClient, fetch_fundamentals
+from .placebo import format_placebo, run_placebo
 from .quotes import YahooQuoteSource
 from .signals.fundamental import FundamentalSignal
 from .signals.lowvol import LowVolSignal
@@ -430,6 +432,33 @@ def cmd_journal(args) -> int:
     return 0
 
 
+def cmd_placebo(args) -> int:
+    """Push random portfolios through the identical gate real candidates face."""
+    if not pathlib.Path(args.db).exists():
+        print(f"No database at {args.db}. Run `ingest` first.", file=sys.stderr)
+        return 1
+    store = FeatureStore(args.db)
+    try:
+        print(f"Running {args.trials} random-portfolio trials, "
+              f"{args.start} .. {args.end}, top {args.top_n}, "
+              f"rebalance {args.rebalance_every}d ...", flush=True)
+
+        def progress(done, total, t):
+            print(f"  trial {done}/{total}: seed {t.seed} "
+                  f"{t.research_passed}/{t.research_total} windows, "
+                  f"holdout {t.holdout_edge:+.2f} "
+                  f"{'PASS' if t.gate_passed else 'fail'}", flush=True)
+
+        result = run_placebo(store, args.start, args.end, trials=args.trials,
+                             top_n=args.top_n, rebalance_every=args.rebalance_every,
+                             on_progress=progress)
+        print()
+        print(format_placebo(result, GATE_0_SHARPE_EDGE))
+    finally:
+        store.close()
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="ghambla")
     p.add_argument("--db", default=DEFAULT_DB)
@@ -545,6 +574,14 @@ def main(argv=None) -> int:
     pj.add_argument("--journal", default=JOURNAL_PATH)
     pj.add_argument("--tail", type=int, default=10)
     pj.set_defaults(func=cmd_journal)
+
+    pp = sub.add_parser("placebo", help="what fraction of random portfolios clear Gate 0?")
+    pp.add_argument("--trials", type=int, default=30)
+    pp.add_argument("--start", type=_date, default=_date("2000-01-01"))
+    pp.add_argument("--end", type=_date, default=_date("2026-08-01"))
+    pp.add_argument("--top-n", type=int, default=10)
+    pp.add_argument("--rebalance-every", type=int, default=21)
+    pp.set_defaults(func=cmd_placebo)
 
     args = p.parse_args(argv)
     return args.func(args)
