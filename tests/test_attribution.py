@@ -130,12 +130,20 @@ def test_information_ratio_is_zero_when_tracking_is_perfect():
 def test_a_noisier_path_to_the_same_edge_scores_a_lower_ratio():
     """Same average outperformance, wildly different consistency. The whole
     point of the ratio is to separate those."""
-    d = days(60)
-    rets = [0.01, -0.015, 0.02, -0.005] * 14 + [0.01, 0.0, 0.005]
+    # An EVEN-length series, so the two alternating excess streams have exactly
+    # the same mean. Only the tracking error differs, which is the whole claim.
+    # With an odd length the means drift apart and the test can pass for the
+    # wrong reason — it did, and a mutation that changed the denominator
+    # survived because of it.
+    rets = [0.01, -0.015, 0.02, -0.005] * 15
+    d = days(len(rets) + 1)
     calm = [0.0012 if i % 2 else 0.0008 for i in range(len(rets))]
     wild = [0.031 if i % 2 else -0.029 for i in range(len(rets))]
     steady = attribution(d, curve([r + e for r, e in zip(rets, calm)]), d, curve(rets))
     noisy = attribution(d, curve([r + e for r, e in zip(rets, wild)]), d, curve(rets))
+
+    assert steady.active_return == pytest.approx(noisy.active_return, rel=1e-9)
+    assert noisy.tracking_error > steady.tracking_error
     assert steady.information_ratio > noisy.information_ratio > 0
 
 
