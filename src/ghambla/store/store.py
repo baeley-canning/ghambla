@@ -7,6 +7,7 @@ then fill at D+1's open.
 Fundamentals in Phase 4 will set `knowable_at` to the report date rather than
 the period end. The column exists now so that change needs no migration.
 """
+import bisect
 import datetime as dt
 import sqlite3
 from dataclasses import dataclass
@@ -105,9 +106,53 @@ class FeatureStore:
         for ddl in schema.ALL:
             self._conn.execute(ddl)
         self._conn.commit()
+        self._cache = None
+        self._cache_range = None
 
     def close(self) -> None:
         self._conn.close()
+
+    def preload(self, start: dt.date, end: dt.date, symbols: Sequence[str] | None = None) -> int:
+        """Load bars for a date range into memory and serve reads from them.
+
+        A 26-year backtest calls `latest_bars_as_of` once per trading day, and
+        each call is a SQL round trip. Loading the whole range once turns
+        thousands of queries into one, which is the difference between a
+        placebo study that runs and one that does not. The cache must be
+        provably identical to the SQL path, so it holds only bars with
+        `date <= end` and reads still filter on `as_of`; the point-in-time
+        guarantee is unchanged.
+        """
+        if symbols is None:
+            cur = self._conn.execute(
+                "SELECT * FROM bars WHERE date >= ? AND date <= ? ORDER BY symbol, date",
+                (start.isoformat(), end.isoformat()),
+            )
+        else:
+            if not symbols:
+                self._cache = {}
+                self._cache_range = (start, end)
+                return 0
+            placeholders = ",".join("?" * len(symbols))
+            cur = self._conn.execute(
+                f"SELECT * FROM bars WHERE date >= ? AND date <= ?"
+                f" AND symbol IN ({placeholders}) ORDER BY symbol, date",
+                (start.isoformat(), end.isoformat(), *symbols),
+            )
+        cache: dict[str, list[Bar]] = {}
+        count = 0
+        for r in cur.fetchall():
+            bar = self._to_bar(r)
+            cache.setdefault(bar.symbol, []).append(bar)
+            count += 1
+        self._cache = cache
+        self._cache_range = (start, end)
+        return count
+
+    def clear_cache(self) -> None:
+        """Drop the in-memory cache; subsequent reads go back to SQL."""
+        self._cache = None
+        self._cache_range = None
 
     def upsert_bars(self, bars: Iterable[Bar]) -> int:
         rows = [
@@ -164,6 +209,39 @@ class FeatureStore:
         """
         if not symbols:
             return {}
+        if self._cache is not None and self._cache_range is not None:
+            start, end = self._cache_range
+            if start <= as_of <= end:
+                out: dict[str, Bar] = {}
+                cached_symbols = []
+                uncached_symbols = []
+                for symbol in symbols:
+                    if symbol in self._cache:
+                        cached_symbols.append(symbol)
+                    else:
+                        uncached_symbols.append(symbol)
+                # Absence means "no data", so a partially-populated cache must
+                # never be allowed to answer for a symbol it does not hold.
+                # Fetch the uncached remainder via SQL and merge it in.
+                if uncached_symbols:
+                    placeholders = ",".join("?" * len(uncached_symbols))
+                    cur = self._conn.execute(
+                        f"SELECT b.* FROM bars b JOIN ("
+                        f"  SELECT symbol, MAX(date) AS d FROM bars"
+                        f"  WHERE knowable_at <= ? AND symbol IN ({placeholders})"
+                        f"  GROUP BY symbol"
+                        f") m ON b.symbol = m.symbol AND b.date = m.d",
+                        (as_of.isoformat(), *uncached_symbols),
+                    )
+                    for r in cur.fetchall():
+                        out[r["symbol"]] = self._to_bar(r)
+                for symbol in cached_symbols:
+                    bars = self._cache[symbol]
+                    dates = [b.date for b in bars]
+                    idx = bisect.bisect_right(dates, as_of) - 1
+                    if idx >= 0:
+                        out[symbol] = bars[idx]
+                return out
         placeholders = ",".join("?" * len(symbols))
         cur = self._conn.execute(
             f"SELECT b.* FROM bars b JOIN ("
