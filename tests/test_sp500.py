@@ -107,3 +107,37 @@ def test_snapshot_dates_are_month_starts():
 def test_snapshot_dates_roll_over_the_year():
     got = snapshot_dates(d("2025-11-05"), d("2026-02-01"))
     assert got == [d("2025-11-01"), d("2025-12-01"), d("2026-01-01"), d("2026-02-01")]
+
+
+# --- membership boundaries ------------------------------------------------
+#
+# Both ends of a membership span are inclusive: a company added on 8 December
+# 1999 was in the index that day, and one removed on 19 June 2017 was still in
+# it that day. A mutation battery shifted both boundaries by a day and the
+# whole suite stayed green, which means the universe could silently gain or
+# lose names at every join and exit without a single test objecting.
+
+def test_a_company_is_a_member_on_the_day_it_joins():
+    spans = parse_membership(CSV)
+    assert "AABA" in members_on(spans, d("1999-12-08"))
+
+
+def test_a_company_is_not_a_member_the_day_before_it_joins():
+    spans = parse_membership(CSV)
+    assert "AABA" not in members_on(spans, d("1999-12-07"))
+
+
+def test_a_company_is_still_a_member_on_the_day_it_is_removed():
+    spans = parse_membership(CSV)
+    assert "AABA" in members_on(spans, d("2017-06-19"))
+
+
+def test_a_company_is_gone_the_day_after_removal():
+    spans = parse_membership(CSV)
+    assert "AABA" not in members_on(spans, d("2017-06-20"))
+
+
+def test_an_open_ended_membership_has_no_upper_boundary():
+    spans = parse_membership(CSV)
+    assert "ZTS" in members_on(spans, d("2013-06-24"))
+    assert "ZTS" in members_on(spans, d("2099-01-01"))
