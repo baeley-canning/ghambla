@@ -26,6 +26,7 @@ from .signals.fundamental import FundamentalSignal
 from .signals.lowvol import LowVolSignal
 from .signals.momentum import MomentumSignal
 from .signals.candles import CandleSignal
+from .signals.cef import CEFDiscountSignal
 from .signals.gap import GapSignal
 from .signals.reversal import ReversalSignal
 from .signals.news import CachedClassifier, NewsSignal, StubClassifier
@@ -202,7 +203,7 @@ def cmd_ingest_fundamentals(args) -> int:
     return 0
 
 
-SIGNAL_NAMES = ["momentum", "fundamental", "news", "lowvol", "reversal", "candles", "gap"]
+SIGNAL_NAMES = ["momentum", "fundamental", "news", "lowvol", "reversal", "candles", "gap", "cef"]
 
 
 def _signals(names):
@@ -228,6 +229,8 @@ def _signal(name):
         return ReversalSignal()
     if name == "candles":
         return CandleSignal()
+    if name == "cef":
+        return CEFDiscountSignal()
     if name == "gap":
         return GapSignal()
     return {"momentum": MomentumSignal, "fundamental": FundamentalSignal}[name]()
