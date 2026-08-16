@@ -124,3 +124,28 @@ same idea.
 
 Both configurations, pass or fail, with the survivorship caveat attached to any
 result.
+
+---
+
+# Result
+
+Run 2026-08-16. Both pre-registered configurations. **Both FAIL, 0/4 windows.**
+
+| Rebalance | Research windows | Holdout edge |
+|---|---|---|
+| 21d | 0 of 4 | -0.65 |
+| 63d | 0 of 4 | -0.40 |
+
+Per-window Sharpe edge:
+
+| Config | 2018-19 | 2019-21 | 2021-23 | 2023-24 | holdout 2024-26 |
+|---|---|---|---|---|---|
+| 21d | -0.29 | -0.00 | -0.09 | -1.30 | -0.65 |
+| 63d | -0.04 | +0.09 | -0.67 | -1.29 | -0.40 |
+
+Best figure across both: +0.09, against a +0.30 bar. Nine of ten windows
+negative. The slower rebalance is mildly better early and no better late.
+
+Candidate 11 fails, and the survivorship caveat recorded in the pre-registration
+now cuts the other way: the universe is funds alive in 2026, which should have
+*flattered* this result, and it still failed.
